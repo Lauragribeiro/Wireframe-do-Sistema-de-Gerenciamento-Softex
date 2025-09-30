@@ -1,0 +1,229 @@
+{
+  "1": [
+    {
+      "id": "ee21myeqpy9",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "3ª PC",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "",
+      "nf": "243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Materiais de consumo",
+      "mesLabel": "07/2025",
+      "just": "JUSTIFICATIVA: Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy",
+      "docs": [
+        "[object Object]",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "9oq97l760kw",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "3ª PC",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "",
+      "nf": "243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Materiais de consumo",
+      "mesLabel": "07/2025",
+      "just": "",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "igielxcj0ti",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "3ª PC",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "YYYY-MM-DD",
+      "nf": "",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-16",
+      "valor": 180576,
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "07/2025",
+      "just": "",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "tgak8jyfppe",
+      "favorecido": "",
+      "pcNumero": "3ª PC",
+      "cnpj": "",
+      "dataTitulo": "",
+      "nf": "",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "07/2025",
+      "just": "",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "jlqmdelhhwp",
+      "favorecido": "",
+      "pcNumero": "3ª PC",
+      "cnpj": "",
+      "dataTitulo": "",
+      "nf": "",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "07/2025",
+      "just": "",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "pwla3hrco6",
+      "favorecido": "",
+      "pcNumero": "",
+      "cnpj": "",
+      "dataTitulo": "",
+      "nf": "",
+      "nExtrato": "",
+      "dataPagamento": "",
+      "valor": "",
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "",
+      "just": "",
+      "docs": []
+    },
+    {
+      "id": "8147tyugciq",
+      "favorecido": "",
+      "pcNumero": "1ª PC",
+      "cnpj": "4320203300127",
+      "dataTitulo": "2025-07-01",
+      "nf": "000",
+      "nExtrato": "",
+      "dataPagamento": "2025-06-30",
+      "valor": "",
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "Jun/2025",
+      "just": "Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy. Os equipamentos são essenciais para garantir que os alunos possam acompanhar as atividades práticas dos projetos reais, desenvolver suas habilidades técnicas e ter um melhor desempenho ao longo do programa. A aquisição visa atender à demanda prevista conforme o número de participantes aprovados na seleção e assegurar a infraestrutura necessária para o início da turma 5.",
+      "docs": [
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    }
+  ],
+  "1759149011623": [
+    {
+      "id": "voa8eyv9uc",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "1ª PC",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "2025-06-30",
+      "nf": "000.000.243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Materiais de consumo",
+      "mesLabel": "07/2025",
+      "just": "JUSTIFICATIVA: Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    }
+  ],
+  "1759152634110": [
+    {
+      "id": "3v1cr47cuzi",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "PC Final",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "2025-06-30",
+      "nf": "000.000.243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "07/2025",
+      "just": "JUSTIFICATIVA: Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    },
+    {
+      "id": "fohqtnz96j",
+      "favorecido": "",
+      "pcNumero": "PC Final",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "2025-06-30",
+      "nf": "000.000.243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Materiais de consumo",
+      "mesLabel": "07/2025",
+      "just": "JUSTIFICATIVA: Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy",
+      "docs": [
+        "Comprovante (colado)",
+        "notafiscal teste.pdf",
+        "oficiodesolicitação.pdf",
+        "ordemdefornecimento teste.pdf",
+        "cotacoes teste.pdf"
+      ]
+    }
+  ],
+  "1759174577339": [
+    {
+      "id": "1d2w4zngon5",
+      "favorecido": "BIDMAX SOLUCOES CORPORATIVAS LTDA",
+      "pcNumero": "1ª PC",
+      "cnpj": "43.202.033/0001-27",
+      "dataTitulo": "2025-06-30",
+      "nf": "000.000.243",
+      "nExtrato": "71.501",
+      "dataPagamento": "2025-07-15",
+      "valor": 180576,
+      "rubrica": "Softwares / máquinas / equipamentos",
+      "mesLabel": "07/2025",
+      "just": "JUSTIFICATIVA: Esta solicitação refere-se à compra de notebooks destinados aos novos alunos da próxima turma do Edge Academy",
+      "docs": [
+        "Comprovante (colado)",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]",
+        "[object Object]"
+      ]
+    }
+  ]
+}

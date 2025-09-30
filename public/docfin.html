@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prestação de Contas — Documentação financeira</title>
+  <link rel="stylesheet" href="/styles/styles.css" />
+
+  <!-- Libs -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js";
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+</head>
+
+<body>
+  <!-- Topbar fixa do site (logos + links utilitários) -->
+  <header class="header">
+    <div class="header-logo">
+      <img src="/assets/edge.png" alt="Edge" />
+      <img src="/assets/vertex.png" alt="Vertex" style="margin-left:10px;height:40px;" />
+    </div>
+    <nav class="header-nav">
+      <a href="/dashboard" class="nav-link">Painel de Projetos</a>
+      <a href="/login" class="nav-link">Login</a>
+    </nav>
+  </header>
+
+  <!-- Subnav (única barra de abas da página) -->
+  <div class="subnav">
+    <div class="subnav-inner">
+      <div class="subnav-title">Prestação de Contas</div>
+      <nav class="tabs">
+        <a class="tab" id="tab-evidencias" href="#">Evidências</a>
+        <a class="tab active" id="tab-docfin" href="#">Documentação financeira</a>
+      </nav>
+    </div>
+  </div>
+
+  <main class="container container--wide">
+    <section class="card block">
+      <h1 class="block-title">Documentação financeira</h1>
+
+      <!-- Cabeçalho do projeto -->
+      <div class="project-head">
+        <div><strong>Projeto:</strong> <span id="p-nome">—</span></div>
+        <div><strong>Código:</strong> <span id="p-codigo">—</span></div>
+        <div><strong>Gerente:</strong> <span id="p-gerente">—</span></div>
+        <div><strong>Status:</strong> <span id="p-status">—</span></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <h3 class="block-subtitle">Cadastrar Compra</h3>
+
+      <form id="form-evid" class="form-grid">
+        <!-- Rubrica no topo ocupando toda a largura -->
+        <label class="field span-2">
+          <span>Tipo de rubrica</span>
+          <select id="rubrica" required>
+            <option value="Materiais de consumo">Materiais de consumo</option>
+            <option value="Material para protótipo">Material para protótipo</option>
+            <option value="Outros correlatos">Outros correlatos</option>
+            <option value="Serviços técnicos de terceiros">Serviços técnicos de terceiros</option>
+            <option value="Treinamento">Treinamento</option>
+            <option value="Softwares / máquinas / equipamentos">
+              Aquisição ou uso de programas de computação e aquisição de máquinas, de equipamentos, de aparelhos e de instrumentos, seus acessórios, sobressalentes e ferramentas
+            </option>
+            <option value="Infraestrutura PD&I">Aquisição, implantação, ampliação ou modernização de infraestrutura física e de laboratórios de PD&I</option>
+            <option value="Livros e periódicos técnicos">Aquisições de livros e periódicos técnicos</option>
+            <option value="Custos incorridos">Custos incorridos</option>
+          </select>
+        </label>
+
+        <!-- CNPJ + Razão (lado a lado) -->
+        <label class="field">
+          <span>CNPJ do favorecido</span>
+          <input id="cnpj-fav" type="text" placeholder="00.000.000/0000-00" required />
+          <small id="cnpj-hint" class="tiny muted"></small>
+        </label>
+
+        <label class="field">
+          <span>Razão Social do Favorecido</span>
+          <input id="fav-razao" type="text" placeholder="— detectado automaticamente —" readonly />
+        </label>
+
+        <!-- Comprovante (colar/arrastar) à esquerda e campos extraídos à direita -->
+        <div class="field span-2">
+          <span class="field__label" style="display:block;margin-bottom:6px;font-weight:600;">Comprovante de Pagamento</span>
+          <div class="split">
+            <div id="pay-paste-zone" class="paste-zone paste-zone--thumb">
+              <p>
+                <strong>Cole</strong> a imagem (Ctrl/Cmd+V), <strong>arraste/solte</strong> aqui, ou
+                <label for="payFileInput" class="link-like">escolha um arquivo</label>.
+              </p>
+              <input id="payFileInput" type="file" accept="image/*" hidden />
+              <img id="payPreview" alt="" class="thumb" style="display:none">
+              <div class="row">
+                <button id="btn-extrair-pagto" type="button" class="btn btn-primary" disabled>Extrair dados</button>
+                <small id="payStatus" class="muted"></small>
+              </div>
+            </div>
+            <button id="btn-pay-upload" type="button">Anexar comprovante</button>
+            <a id="md-comprovante-link" href="#" target="_blank" rel="noopener" hidden>abrir comprovante</a>
+            <img id="md-comprovante-preview" alt="preview do comprovante" hidden style="max-width:160px; display:block; margin-top:8px;">
+
+            <div class="form-grid-mini">
+              <label class="field">
+                <span>Data do pagamento</span>
+                <input id="inputDataPagamento" type="date" />
+              </label>
+              <label class="field">
+                <span>Nº do extrato</span>
+                <input id="inputNumeroExtrato" type="text" />
+              </label>
+              <label class="field">
+                <span>Valor pago (R$)</span>
+                <input id="inputValorPago" type="text" inputmode="decimal" placeholder="0,00" />
+              </label>
+              <label class="field">
+                <span>Mês/Ano</span>
+                <input id="inputMesAno" type="text" placeholder="MM/AAAA" />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- NF / Recibo -->
+        <label class="field">
+          <span>Nota Fiscal / Recibo (PDF/Imagem)</span>
+          <label class="btn btn-light btn-upload">
+            <input id="up-nf" type="file" accept=".pdf,image/*" class="hidden-input" />
+            Enviar
+          </label>
+          <div id="chips-nf" class="chips tiny muted"></div>
+          <div id="hint-nf" class="tiny muted"></div>
+        </label>
+
+        <!-- Ofício (Justificativa) -->
+        <label class="field">
+          <span>Ofício de Solicitação (PDF/Imagem)</span>
+          <label class="btn btn-light btn-upload">
+            <input id="up-oficio" type="file" accept=".pdf,image/*" class="hidden-input" />
+            Enviar
+          </label>
+          <div id="chips-oficio" class="chips tiny muted"></div>
+          <div id="hint-oficio" class="tiny muted"></div>
+        </label>
+
+        <!-- Ordem e Cotações -->
+        <label class="field">
+          <span>Ordem de fornecimento (PDF/Imagem)</span>
+          <label class="btn btn-light btn-upload">
+            <input id="up-ordem" type="file" accept=".pdf,image/*" class="hidden-input" />
+            Enviar
+          </label>
+          <div id="chips-ordem" class="chips tiny muted"></div>
+        </label>
+
+        <label class="field">
+          <span>Cotações (PDF/Imagem) — múltiplos</span>
+          <label class="btn btn-light btn-upload">
+            <input id="up-cotacoes" type="file" accept=".pdf,image/*" class="hidden-input" multiple />
+            Enviar
+          </label>
+          <div id="chips-cotacoes" class="chips tiny muted"></div>
+        </label>
+
+        <div class="field" style="align-self:end;">
+          <button type="submit" class="btn btn-primary">Adicionar à tabela</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Tabela -->
+    <section class="card block" id="pc-section">
+      <div class="block-title" style="display:flex;align-items:center;gap:12px;">
+        <h2 style="margin:0;">Processos de compras</h2>
+        <button id="btn-save" class="btn btn-primary" style="margin-left:auto;">Salvar tabela</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table" id="tbl-pc">
+          <thead>
+            <tr>
+              <th>Favorecido</th>
+              <th>Nº da PC</th>
+              <th>CNPJ</th>
+              <th>Data do título</th>
+              <th>NF/Recibo</th>
+              <th>Nº do extrato</th>
+              <th>Data do pagamento</th>
+              <th>Valor pago (R$)</th>
+              <th>Tipo de rubrica</th>
+              <th>Mês/Ano</th>
+              <th>Justificativa para compra</th>
+              <th>Documentação</th>
+              <th style="width:84px">Ações</th>
+            </tr>
+          </thead>
+          <tbody><!-- via JS --></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Modal Detalhes do Processo de Compra ===== -->
+  <dialog id="pc-modal" class="modal">
+    <div class="modal__content" style="max-width:1100px;">
+      <div class="modal__header">
+        <h2>Detalhes do Processo de Compra</h2>
+        <button type="button" class="icon-btn" id="pc-close" aria-label="Fechar">✕</button>
+      </div>
+
+      <div class="form-grid form-grid--pcmodal">
+        <label class="field">
+          <span>Favorecido</span>
+          <input id="md-fav" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>CNPJ</span>
+          <input id="md-cnpj" type="text" readonly />
+        </label>
+
+        <label class="field">
+          <span>Nº da PC</span>
+          <input id="md-pc" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>Data do título</span>
+          <input id="md-data-titulo" type="text" readonly />
+        </label>
+
+        <label class="field">
+          <span>Nº do recibo</span>
+          <input id="md-nf" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>Nº do extrato</span>
+          <input id="md-extrato" type="text" readonly />
+        </label>
+
+        <label class="field">
+          <span>Data pagamento</span>
+          <input id="md-data-pagto" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>Valor pago</span>
+          <input id="md-valor" type="text" readonly />
+        </label>
+
+        <label class="field">
+          <span>Tipo de rubrica</span>
+          <input id="md-rubrica" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>Mês/Ano</span>
+          <input id="md-mesano" type="text" readonly />
+        </label>
+
+        <label class="field span-2">
+          <span>Justificativa para compra</span>
+          <textarea id="md-just" rows="3" readonly></textarea>
+        </label>
+      </div>
+
+      <div class="divider"></div>
+
+      <section>
+        <h3 class="block-subtitle">Geração de Documentos</h3>
+        <p class="tiny muted">Selecione abaixo o documento que deseja gerar ou baixe todos de uma vez.</p>
+
+        <div class="row" style="gap:12px;flex-wrap:wrap;">
+          <button id="btn-folha" class="btn" type="button">Gerar Folha de Rosto</button>
+
+          <button id="btn-just-dispensa" class="btn btn-warning" type="button">
+            Gerar Mapa de Cotação / Justificativa de Dispensa
+          </button>
+
+          <button id="btn-zip" class="btn" type="button">
+            Baixar todos os documentos (ZIP)
+          </button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Guard + lógica -->
+  <script type="module" src="/scripts.js"></script>
+  <script type="module" src="/docfin.js"></script>
+  <script type="module">
+    import { getAuth, logout } from "/scripts.js";
+    const me = getAuth();
+    document.querySelector("#userName")?.textContent = me?.name || "";
+    document.querySelector("#logoutBtn")?.addEventListener("click", logout);
+  </script>
+</body>
+</html>

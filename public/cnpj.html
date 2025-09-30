@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8" />
+<title>Teste CNPJ</title>
+<body style="font-family:system-ui;margin:40px">
+  <h1>Teste de CNPJ → BrasilAPI (via /api/cnpj/:cnpj)</h1>
+  <label>CNPJ: <input id="cnpj" placeholder="00.000.000/0001-91"></label>
+  <button id="btn">Buscar</button>
+  <pre id="out" style="padding:12px;border:1px solid #ddd;border-radius:8px"></pre>
+
+  <script>
+    const onlyDigits = s => (s||"").replace(/\D/g,"");
+    btn.onclick = async () => {
+      out.textContent = "Carregando...";
+      try {
+        const c = onlyDigits(cnpj.value);
+        const r = await fetch(`/api/cnpj/${c}`);
+        const j = await r.json();
+        out.textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        out.textContent = e.message;
+      }
+    };
+  </script>
+</body>
+</html>

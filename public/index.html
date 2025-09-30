@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Login • Sistema de automação de PC</title>
+
+  <!-- Fonte do título (fallback) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/styles/styles.css" />
+</head>
+<body class="login">
+  <main class="auth">
+    <!-- Coluna Esquerda -->
+    <section class="auth__left">
+      <div class="auth__card">
+        <!-- Título -->
+        <header class="brand">
+          <h1 class="brand__title">Sistema de automação de PC</h1>
+          <img src="/assets/badge.png" alt="" class="brand__badge" loading="eager" decoding="sync" onerror="this.remove()" />
+        </header>
+
+        <!-- Tabs -->
+        <div class="auth-tabs" role="tablist" aria-label="Acesso">
+          <button class="auth-tab is-active" data-tab="login" role="tab" aria-selected="true">Log in</button>
+          <button class="auth-tab" data-tab="signup" role="tab" aria-selected="false">Sign up</button>
+        </div>
+
+        <!-- LOGIN -->
+        <form id="loginForm" class="auth-pane is-active" data-pane="login" novalidate>
+          <label class="field">
+            <span class="field__label">Email</span>
+            <input id="email" type="email" name="email" autocomplete="username" required class="input" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Senha</span>
+            <div class="input input--with-icon">
+              <input id="password" type="password" name="senha" autocomplete="current-password" required minlength="4" />
+              <button type="button" class="icon-btn" aria-label="Mostrar/ocultar senha" id="togglePwd">
+                <svg viewBox="0 0 24 24" class="icon"><path d="M12 5C7 5 3 9 2 12c1 3 5 7 10 7s9-4 10-7c-1-3-5-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg>
+              </button>
+            </div>
+          </label>
+
+          <label class="checkbox">
+            <input type="checkbox" name="remember" checked />
+            <span>Remember Me</span>
+          </label>
+
+          <button type="submit" class="btn btn--primary">Log in</button>
+          <div id="loginError" class="muted tiny" style="color:#b91c1c;margin-top:.5rem;"></div>
+          <button type="button" class="btn btn--ghost" id="forgotBtn">Esqueci minha senha</button>
+
+          <div class="partners">
+            <img src="/assets/edge.png" alt="edge" />
+            <img src="/assets/vertex.png" alt="vertex" />
+          </div>
+        </form>
+
+        <!-- SIGN UP -->
+        <form id="signupForm" class="auth-pane" data-pane="signup" novalidate>
+          <label class="field">
+            <span class="field__label">Email</span>
+            <input type="email" name="email" required class="input" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Senha</span>
+            <input type="password" name="senha" required minlength="4" class="input" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">Acesso</span>
+            <select name="acesso" required class="input selectlike">
+              <option value="" hidden>Selecione…</option>
+              <option value="ADMIN">Administrativo</option>
+              <option value="GERENTE">Gerente de Projeto</option>
+            </select>
+          </label>
+
+          <button type="submit" class="btn btn--primary">Criar conta</button>
+          <p class="muted tiny">Ao continuar, você concorda com os termos de uso.</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Coluna Direita (imagem) -->
+    <section class="auth__right" aria-hidden="true">
+      <img
+        src="/assets/index.png"
+        alt="Ilustração do sistema"
+        class="illustration-hero"
+        loading="eager"
+        decoding="sync"
+        onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'illustration-fallback',innerText:'/assets/index.png não encontrado'}));"
+      />
+    </section>
+  </main>
+
+  <!-- Seu fluxo real -->
+  <script type="module" src="/src/login.js"></script>
+
+  <!-- JS: tabs + toggle de senha + placeholders de ação -->
+  <script>
+    // tabs
+    const tabs = document.querySelectorAll('.auth-tab');
+    const panes = document.querySelectorAll('.auth-pane');
+    tabs.forEach(btn => btn.addEventListener('click', () => {
+      tabs.forEach(b => b.classList.toggle('is-active', b === btn));
+      panes.forEach(p => p.classList.toggle('is-active', p.dataset.pane === btn.dataset.tab));
+    }));
+
+    // toggle pwd
+    const pwd = document.getElementById('password');
+    document.getElementById('togglePwd')?.addEventListener('click', () => {
+      if (!pwd) return;
+      pwd.type = pwd.type === 'password' ? 'text' : 'password';
+    });
+
+    // ações de demonstração
+    document.getElementById('forgotBtn')?.addEventListener('click', () => alert('Recuperação de senha'));
+  </script>
+</body>
+</html>
+

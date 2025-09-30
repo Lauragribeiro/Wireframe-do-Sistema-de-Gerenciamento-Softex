@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "data": {
+    "cnpj": "00.000.000/0001-91",
+    "nf": "71501",
+    "nExtrato": "375875...",
+    "dataTitulo": "2025-07-20",
+    "dataPagamento": "2025-07-15",
+    "valor": 180576.00,
+    "just": "Texto curto da justificativa extraída do ofício.",
+    "pcNumero": "3ª PC",
+    "mesLabel": "Jul/2025"
+  }
+}

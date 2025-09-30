@@ -1,0 +1,30 @@
+{
+  "name": "wireframe-prestacao",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "docx": "^9.5.1",
+    "docx-merger": "^1.2.2",
+    "docx-templates": "^4.14.1",
+    "docxtemplater": "^3.66.4",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "mime-types": "^3.0.1",
+    "multer": "^1.4.5-lts.1",
+    "openai": "^4.104.0",
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^5.4.149",
+    "pizzip": "^3.2.0",
+    "tesseract.js": "^5.1.1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
