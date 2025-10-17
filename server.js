@@ -7,7 +7,7 @@ import fileUpload from "express-fileupload";
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import PizZip from "pizzip";
@@ -19,7 +19,7 @@ dayjs.locale("pt-br");
 
 // Routers externos (mantidos; adiciono fallbacks mais abaixo)
 import uploadsRouter                   from "./src/uploads.js";
-import parseDocsRouter                 from "./src/parseDocs.js";
+import parseDocsRouter, { extractPurchaseDocData } from "./src/parseDocs.js";
 import vendorsRouter                   from "./src/vendors.js";
 // import purchasesRouter               from "./src/purchases.js"; // ⇐ NÃO usar (router interno abaixo)
 import generateDocsRouter, { registerDocRoutes } from "./src/generateDocs.js";
@@ -97,9 +97,11 @@ purchasesRouter.get("/purchases", async (req, res) => {
     if (!Array.isArray(list)) list = [];
 
     // filtra por projeto, mas NUNCA injeta valores do formulário atual
-    const data = qProject
-      ? list.filter(x => String(x?.projectId ?? "") === qProject)
+    const dataRaw = qProject
+      ? list.filter((x) => String(x?.projectId ?? "") === qProject)
       : list;
+
+    const data = await Promise.all(dataRaw.map((row) => presentPurchaseRow(row)));
 
     return res.json({ ok: true, data });
   } catch (e) {
@@ -111,7 +113,14 @@ purchasesRouter.get("/purchases", async (req, res) => {
 // CRIAR/ATUALIZAR
 purchasesRouter.post("/purchases", async (req, res) => {
   try {
-    const incoming = normalizePurchaseInput(req.body || {});
+    const fallbackProject =
+      req.body?.projectId ??
+      req.body?.projetoId ??
+      req.body?.projId ??
+      req.query?.projectId ??
+      "";
+
+    const incoming = await normalizePurchaseInput(req.body || {}, fallbackProject);
     let list = await readPurchases();
     if (!Array.isArray(list)) list = [];
 
@@ -119,14 +128,55 @@ purchasesRouter.post("/purchases", async (req, res) => {
     if (!incoming.id) incoming.id = Date.now() + Math.floor(Math.random() * 1000);
 
     const idx = list.findIndex(x => String(x.id) === String(incoming.id));
-    if (idx >= 0) list[idx] = mergeDefined(list[idx], incoming);
-    else list.push(incoming);
+    let stored;
+    if (idx >= 0) {
+      stored = mergeDefined(list[idx], incoming);
+      list[idx] = stored;
+    } else {
+      stored = incoming;
+      list.push(stored);
+    }
 
     await writePurchases(list);
-    return res.json({ ok: true, data: incoming });
+    return res.json({ ok: true, data: await presentPurchaseRow(stored) });
   } catch (e) {
     console.error("[purchases] POST erro:", e);
     return res.status(200).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+purchasesRouter.put("/purchases", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const projectId = String(
+      body.projectId ?? body.projetoId ?? body.projId ?? ""
+    ).trim();
+
+    if (!projectId) {
+      return res.status(400).json({ ok: false, error: "project_required" });
+    }
+
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+
+    let list = await readPurchases();
+    if (!Array.isArray(list)) list = [];
+
+    // remove entradas anteriores do mesmo projeto
+    list = list.filter((item) => String(item?.projectId ?? "") !== projectId);
+
+    const sanitized = await Promise.all(
+      rows.map((row) => normalizePurchaseInput(row || {}, projectId, { assignId: true }))
+    );
+
+    list.push(...sanitized);
+    await writePurchases(list);
+
+    const response = await Promise.all(sanitized.map((row) => presentPurchaseRow(row)));
+
+    return res.json({ ok: true, data: response });
+  } catch (e) {
+    console.error("[purchases] PUT erro:", e);
+    return res.status(500).json({ ok: false, error: "save_failed" });
   }
 });
 
@@ -169,51 +219,322 @@ async function writeProjects(list) {
   const clean = Array.isArray(list) ? list : [];
   await fsp.writeFile(PROJECTS_FILE, JSON.stringify({ data: clean }, null, 2), "utf8");
 }
-function normalizePurchaseInput(body = {}) {
-  // helper que mantém null/"" como "sem valor", mas não manda undefined
-  const pick = (v) => (v === undefined ? undefined : v);
+const MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-  return {
-    id: pick(body.id),
-    projectId: pick(body.projectId ?? body.projetoId ?? body.projId),
-
-    // identificação do favorecido
-    favorecido: pick(body.favorecido ?? body.favorecidoNome),
-    cnpj: pick(body.cnpj ?? body.cnpjFav ?? body.favorecidoDoc),
-
-    // número do processo
-    pcNumero: pick(body.pcNumero ?? body.numeroPc ?? body.n_pc),
-
-    // CAMPOS QUE FALTAVAM NA TABELA
-    data_titulo: pick(body.data_titulo ?? body.dataTitulo),
-    nf_recibo: pick(body.nf_recibo ?? body.nf ?? body.numeroNf ?? body.recibo),
-    justificativa: pick(body.justificativa ?? body.justificativaCompra),
-
-    // demais campos
-    numero_extrato: pick(body.numeroExtrato ?? body.n_extrato),
-    data_pagamento: pick(body.data_pagamento ?? body.dataPagamento),
-    valor_pago: pick(body.valor_pago ?? body.valor ?? body.valorPago),
-    tipo_rubrica: pick(body.tipo_rubrica ?? body.tipoRubrica ?? body.rubrica),
-    mes_ano: pick(body.mes_ano ?? body.mesAno),
-
-    // urls/nomes de arquivos (se o front mandar)
-    docs: {
-      nf: body.docs?.nf ?? body.docNf ?? null,
-      oficio: body.docs?.oficio ?? null,
-      ordem_fornecimento: body.docs?.ordem_fornecimento ?? null,
-      comprovante: body.docs?.comprovante ?? null,
-      cotacoes: Array.isArray(body.docs?.cotacoes) ? body.docs.cotacoes : [],
-    },
-  };
+function toStringSafe(v) {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return String(v).trim();
+  return "";
 }
 
-// merge que não sobrescreve com undefined
+function normalizeDate(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const ddmmyyyy = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+    return trimmed; // devolve como veio (o front lida com outros formatos)
+  }
+  if (typeof value === "number") {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  if (typeof value === "object") {
+    if (value.iso) return normalizeDate(value.iso);
+    if (value.data) return normalizeDate(value.data);
+    if (value.date) return normalizeDate(value.date);
+  }
+  return "";
+}
+
+function normalizeMoney(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "number") return Number.isFinite(value) ? value : "";
+  if (typeof value === "object") {
+    if (typeof value.valor_pago_num === "number") return value.valor_pago_num;
+    if (typeof value.valor === "number") return value.valor;
+    if (value.raw) return normalizeMoney(value.raw);
+  }
+  const str = String(value)
+    .replace(/R\$/gi, "")
+    .replace(/\s+/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const num = Number(str);
+  return Number.isFinite(num) ? num : "";
+}
+
+function normalizeDocs(body = {}) {
+  const src = body.docs || body.documentacao || body.documentos || {};
+  const ordemVal = src.ordem ?? src.ordem_fornecimento ?? src.ordemFornecimento ?? null;
+  const docs = {
+    nf: src.nf ?? src.notaFiscal ?? body.docNf ?? null,
+    oficio: src.oficio ?? src.oficio_solicitacao ?? null,
+    ordem: ordemVal,
+    ordem_fornecimento: src.ordem_fornecimento ?? ordemVal,
+    comprovante: src.comprovante ?? src.pagamento ?? null,
+    cotacoes: Array.isArray(src.cotacoes)
+      ? src.cotacoes
+      : Array.isArray(body.cotacoes)
+      ? body.cotacoes
+      : [],
+  };
+  return docs;
+}
+
+const MIME_BY_EXT = {
+  ".pdf": "application/pdf",
+  ".xml": "application/xml",
+  ".txt": "text/plain",
+  ".ofx": "application/x-ofx",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+};
+
+function guessMimeFromPath(filePath = "") {
+  const ext = extname(String(filePath || "")).toLowerCase();
+  return MIME_BY_EXT[ext] || "application/octet-stream";
+}
+
+async function loadDocFile(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  if (entry.buffer && entry.buffer.length) return entry;
+  const filePath =
+    entry.path || entry.filepath || entry.fullpath || entry.tempFilePath || entry.dest || entry.destination;
+  if (!filePath) return null;
+  try {
+    const buffer = await fsp.readFile(filePath);
+    const mimetype = entry.mimetype || guessMimeFromPath(filePath);
+    const originalname = entry.originalname || entry.name || entry.filename || filePath.split(/[/\\]/).pop();
+    return { ...entry, buffer, mimetype, originalname };
+  } catch (err) {
+    console.warn("[purchases] falha ao ler arquivo de doc:", filePath, err?.message || err);
+    return null;
+  }
+}
+
+async function extractDocsMetadata(docs) {
+  if (!docs || typeof docs !== "object") return null;
+  const nfFile = await loadDocFile(docs.nf);
+  const oficioFile = await loadDocFile(docs.oficio);
+  const ordemFile = await loadDocFile(docs.ordem || docs.ordem_fornecimento);
+  const cotacoes = Array.isArray(docs.cotacoes)
+    ? (await Promise.all(docs.cotacoes.map(loadDocFile))).filter(Boolean)
+    : [];
+
+  if (!nfFile && !oficioFile && !ordemFile && !cotacoes.length) return null;
+
+  try {
+    return await extractPurchaseDocData({ nfFile, oficioFile, ordemFile, cotacoes });
+  } catch (err) {
+    console.warn("[purchases] falha ao extrair metadados dos documentos:", err?.message || err);
+    return null;
+  }
+}
+
+function buildMesLabel(rawLabel, isoFromPayment = "") {
+  const base = toStringSafe(rawLabel);
+  if (base) {
+    const mm = base.match(/^(\d{1,2})\/(\d{4})$/);
+    if (mm) {
+      const idx = Number(mm[1]) - 1;
+      return MONTH_LABELS[idx] ? `${MONTH_LABELS[idx]}/${mm[2]}` : base;
+    }
+    return base;
+  }
+  if (!isoFromPayment) return "";
+  const d = new Date(`${isoFromPayment}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${MONTH_LABELS[d.getMonth()]}/${d.getFullYear()}`;
+}
+
+function labelToMesAno(label = "") {
+  const txt = toStringSafe(label);
+  if (!txt) return "";
+  const mm = txt.match(/^(\d{1,2})\/(\d{4})$/);
+  if (mm) return `${mm[1].padStart(2, "0")}/${mm[2]}`;
+  const parts = txt.split("/");
+  if (parts.length === 2) {
+    const idx = MONTH_LABELS.findIndex((m) => m.toLowerCase() === parts[0].toLowerCase());
+    if (idx >= 0) return `${String(idx + 1).padStart(2, "0")}/${parts[1]}`;
+  }
+  return txt;
+}
+
+async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
+  const assignId = opts.assignId ?? true;
+
+  const idRaw = body.id ?? body.ID ?? body._id;
+  const projectRaw =
+    body.projectId ?? body.projetoId ?? body.projId ?? fallbackProjectId ?? "";
+
+  let dataTitulo = normalizeDate(
+    body.dataTitulo ?? body.data_titulo ?? body.data_titulo_nf ?? body.data_emissao_iso
+  );
+  let nf = toStringSafe(
+    body.nf ?? body.nf_recibo ?? body.nfNumero ?? body.numeroNf ?? body.recibo ?? body.nf_num_9_mask ?? body.nf_num_9
+  );
+  let just = toStringSafe(
+    body.just ?? body.justificativa ?? body.justificativaCompra ?? body.justificativa_para_compra
+  );
+  const nExtrato = toStringSafe(
+    body.nExtrato ?? body.numero_extrato ?? body.numeroExtrato ?? body.n_extrato ?? body.extrato
+  );
+  const dataPagamento = normalizeDate(
+    body.dataPagamento ?? body.data_pagamento ?? body.data_pagamento?.iso ?? body.data_pagto
+  );
+  const valor = normalizeMoney(
+    body.valor ?? body.valor_pago ?? body.valorPago ?? body.valor_pagamento ?? body.valor_pago_num
+  );
+  const rubrica = toStringSafe(
+    body.rubrica ?? body.tipo_rubrica ?? body.tipoRubrica ?? body.naturezaDisp
+  );
+  const mesAnoInput = toStringSafe(body.mesAno ?? body.mes_ano ?? "");
+  const mesLabel = buildMesLabel(
+    body.mesLabel ?? body.mes_label ?? mesAnoInput,
+    dataPagamento
+  );
+  const mesAno = mesAnoInput || labelToMesAno(mesLabel);
+
+  const docs = normalizeDocs(body);
+
+  const out = {
+    favorecido: toStringSafe(body.favorecido ?? body.favorecidoNome ?? body.nomeFavorecido),
+    cnpj: toStringSafe(body.cnpj ?? body.cnpjFav ?? body.favorecidoDoc),
+    pcNumero: toStringSafe(body.pcNumero ?? body.numeroPc ?? body.n_pc),
+    dataTitulo,
+    nf,
+    nExtrato,
+    dataPagamento,
+    valor,
+    rubrica,
+    mesLabel,
+    mesAno,
+    just,
+    docs,
+  };
+
+  if (assignId || idRaw != null) {
+    const id = idRaw != null ? String(idRaw) : String(Date.now() + Math.floor(Math.random() * 1000));
+    out.id = id;
+  }
+  if (projectRaw) out.projectId = String(projectRaw);
+
+  if ((!dataTitulo || !nf || !just) && docs && typeof docs === "object") {
+    const meta = await extractDocsMetadata(docs);
+    if (meta) {
+      if (!dataTitulo) {
+        const iso = normalizeDate(meta.data_emissao_iso ?? meta.dataTitulo);
+        if (iso) {
+          dataTitulo = iso;
+          out.dataTitulo = iso;
+        }
+      }
+      if (!nf) {
+        const nfCandidate =
+          meta.nf_num_9_mask ??
+          meta.nf_num_9 ??
+          meta.nf_num ??
+          meta.nf_num_mask ??
+          meta.nf ??
+          "";
+        const nfVal = toStringSafe(nfCandidate);
+        if (nfVal) {
+          nf = nfVal;
+          out.nf = nfVal;
+        }
+      }
+      if (!just) {
+        const justVal = toStringSafe(meta.just);
+        if (justVal) {
+          just = justVal;
+          out.just = justVal;
+        }
+      }
+    }
+  }
+
+  // aliases para compatibilidade
+  out.dataTitulo = dataTitulo;
+  out.data_titulo = dataTitulo;
+  out.data_emissao_iso = out.data_emissao_iso ?? dataTitulo;
+  out.data_emissao = out.data_emissao ?? dataTitulo;
+  out.nf = nf;
+  out.nf_recibo = nf;
+  const nfDigits = nf.replace(/\D+/g, "");
+  if (nfDigits) {
+    const nine = nfDigits.padStart(9, "0").slice(-9);
+    const mask = `${nine.slice(0, 3)}.${nine.slice(3, 6)}.${nine.slice(6)}`;
+    out.nf_num = out.nf_num ?? nine;
+    out.nf_num_mask = out.nf_num_mask ?? mask;
+    out.nf_num_9 = out.nf_num_9 ?? nine;
+    out.nf_num_9_mask = out.nf_num_9_mask ?? mask;
+  } else {
+    out.nf_num = out.nf_num ?? nf;
+    out.nf_num_mask = out.nf_num_mask ?? nf;
+    out.nf_num_9 = out.nf_num_9 ?? nf;
+    out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
+  }
+  out.just = just;
+  out.justificativa = just;
+  out.justificativa_para_compra = out.justificativa_para_compra ?? just;
+  out.numero_extrato = nExtrato;
+  out.data_pagamento = dataPagamento;
+  out.valor_pago = valor;
+  out.valorPago = out.valorPago ?? valor;
+  if (out.valor_pago_num == null) {
+    if (typeof valor === "number") out.valor_pago_num = valor;
+    else if (valor) {
+      const parsed = Number(valor);
+      out.valor_pago_num = Number.isFinite(parsed) ? parsed : null;
+    } else {
+      out.valor_pago_num = null;
+    }
+  }
+  out.tipo_rubrica = rubrica;
+  out.tipoRubrica = out.tipoRubrica ?? rubrica;
+  out.mesLabel = mesLabel;
+  out.mesAno = mesAno;
+  out.mes_ano = mesAno;
+  out.docs = docs;
+
+  return out;
+}
+
+// merge que preserva objetos aninhados
 function mergeDefined(prev = {}, incoming = {}) {
-  const out = { ...prev };
-  for (const [k, v] of Object.entries(incoming)) {
-    if (v !== undefined) out[k] = v;
+  const out = Array.isArray(prev) ? [...prev] : { ...prev };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined) continue;
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      prev &&
+      typeof prev[key] === "object" &&
+      !Array.isArray(prev[key])
+    ) {
+      out[key] = mergeDefined(prev[key], value);
+    } else {
+      out[key] = value;
+    }
   }
   return out;
+}
+
+async function presentPurchaseRow(row = {}) {
+  const normalized = await normalizePurchaseInput(row, row.projectId ?? row.projetoId ?? "", {
+    assignId: false,
+  });
+  // valores normalizados devem sobrescrever para garantir campos exigidos
+  const merged = { ...row, ...normalized };
+  if (merged.id == null && normalized.id != null) merged.id = normalized.id;
+  if (merged.projectId == null && normalized.projectId != null) merged.projectId = normalized.projectId;
+  return merged;
 }
 
 /* ========================================================================== *

@@ -431,6 +431,95 @@ function pickPaymentDate(text = "") {
 }
 
 /* ================= ROTA: /parse-docs (NF/Ofício/Ordem/Cotações) ================= */
+export async function extractPurchaseDocData({ nfFile = null, oficioFile = null, ordemFile = null, cotacoes = [] } = {}) {
+  // 1) Campos fortes diretamente da NF
+  let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
+  if (nfFile?.buffer) {
+    const name = (nfFile.originalname || nfFile.name || "").toLowerCase();
+    if (name.endsWith(".xml")) {
+      const xml = nfFile.buffer.toString("utf-8");
+      nfFields = extractFromXml(xml);
+    } else {
+      const maybeText = await fileToText(nfFile);
+      const { nf_num_9, nf_num_9_mask } = extractNF9FromText(maybeText);
+      const data_emissao_iso = extractIssueFromTextNF(maybeText);
+      nfFields = { nf_num_9, nf_num_9_mask, data_emissao_iso };
+    }
+  }
+
+  const nfText     = await fileToText(nfFile);
+  const oficioText = await fileToText(oficioFile);
+  const ordemText  = await fileToText(ordemFile);
+  const cotText    = (await Promise.all((cotacoes || []).map(fileToText))).join("\n---\n");
+
+  const localNF   = extractNF_local(nfText);
+  const localJust = extractJust_local(`${oficioText}\n${ordemText}`);
+
+  const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
+  const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
+
+  let nfFinal = null;
+  if (nfFields.nf_num_9) {
+    nfFinal = nfFields.nf_num_9;
+  } else {
+    const fromText = extractNF9FromText(nfText || "");
+    nfFinal = fromText.nf_num_9 || onlyDigits(localNF) || onlyDigits(llm?.nf || "");
+    if (nfFinal) nfFinal = String(nfFinal).padStart(9, "0").slice(-9);
+  }
+  const nfMask = nfFinal ? mask9(nfFinal) : null;
+
+  const dataTituloISO =
+    nfFields.data_emissao_iso ||
+    extractIssueFromTextNF(nfText || "") ||
+    null;
+
+  const dataTituloBR = toBRDate(dataTituloISO || "");
+
+  let justFinal = (localJust || "").trim();
+  if (!justFinal && llm?.just) justFinal = String(llm.just).trim();
+
+  const merged = {
+    nf: nfFinal || "",
+    nf_num_9: nfFinal || null,
+    nf_num_9_mask: nfMask,
+    data_emissao_iso: dataTituloISO || "",
+    dataTitulo: dataTituloBR || "",
+    just: justFinal || "",
+    cnpj: (llm?.cnpj || "").trim(),
+    pcNumero: (llm?.pcNumero || "").trim(),
+  };
+
+  if (!merged.nf || !merged.data_emissao_iso) {
+    const texts = [oficioText, ordemText, cotText].filter(Boolean).join("\n");
+    if (!merged.nf) {
+      const got = extractNF9FromText(texts);
+      if (got?.nf_num_9) {
+        merged.nf = got.nf_num_9;
+        merged.nf_num_9 = got.nf_num_9;
+        merged.nf_num_9_mask = got.nf_num_9_mask;
+      }
+    }
+    if (!merged.data_emissao_iso) {
+      const d = extractIssueFromTextNF(texts);
+      if (d) {
+        merged.data_emissao_iso = d;
+        merged.dataTitulo = toBRDate(d);
+      }
+    }
+  }
+
+  if (!merged.nf_num_9 && merged.nf) {
+    const raw = onlyDigits(merged.nf);
+    if (raw.length >= 3 && raw.length <= 12) {
+      const nine = raw.padStart(9, "0").slice(-9);
+      merged.nf_num_9 = nine;
+      merged.nf_num_9_mask = mask9(nine);
+    }
+  }
+
+  return merged;
+}
+
 router.post("/parse-docs", async (req, res, next) => {
   if (!req.headers["content-type"]?.includes("multipart/form-data")) {
     return res.status(400).json({ ok: false, message: "Conteúdo inválido (esperado multipart/form-data)" });
@@ -450,100 +539,12 @@ router.post("/parse-docs", async (req, res, next) => {
       const ordemFile  = (req.files?.ordem || [])[0];
       const cots       = (req.files?.cotacoes || []);
 
-      // 1) Campos fortes diretamente da NF
-      let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
-      if (nfFile) {
-        const name = (nfFile.originalname || "").toLowerCase();
-        if (name.endsWith(".xml")) {
-          const xml = nfFile.buffer.toString("utf-8");
-          nfFields = extractFromXml(xml);
-        } else {
-          const maybeText = await fileToText(nfFile); // PDF/Imagem → texto
-          const { nf_num_9, nf_num_9_mask } = extractNF9FromText(maybeText);
-          const data_emissao_iso = extractIssueFromTextNF(maybeText);
-          nfFields = { nf_num_9, nf_num_9_mask, data_emissao_iso };
-        }
-      }
-
-      // 2) Textos para heurísticas + LLM
-      const nfText     = await fileToText(nfFile);
-      const oficioText = await fileToText(oficioFile);
-      const ordemText  = await fileToText(ordemFile);
-      const cotText    = (await Promise.all(cots.map(fileToText))).join("\n---\n");
-
-      // heurísticas
-      const localNF   = extractNF_local(nfText);
-      const localJust = extractJust_local(`${oficioText}\n${ordemText}`);
-
-      // 3) LLM (opcional)
-      const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
-      const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
-
-      // 4) Merge — NF
-      let nfFinal = null;
-      if (nfFields.nf_num_9) {
-        nfFinal = nfFields.nf_num_9;
-      } else {
-        const fromText = extractNF9FromText(nfText || "");
-        nfFinal = fromText.nf_num_9 || onlyDigits(localNF) || onlyDigits(llm?.nf || "");
-        if (nfFinal) nfFinal = String(nfFinal).padStart(9, "0").slice(-9);
-      }
-      const nfMask = nfFinal ? mask9(nfFinal) : null;
-
-      // 4) Merge — Data do título
-  
-      const dataTituloISO =
-      nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
-      extractIssueFromTextNF(nfText || "") ||      // PDF/Imagem: Emissão → Saída
-    null;
-
-     const dataTituloBR = toBRDate(dataTituloISO || "");
-
-      // 4) Merge — Justificativa
-      let justFinal = (localJust || "").trim();
-      if (!justFinal && llm?.just) justFinal = String(llm.just).trim();
-
-      const merged = {
-        nf: nfFinal || "",
-        nf_num_9: nfFinal || null,
-        nf_num_9_mask: nfMask,
-        data_emissao_iso: dataTituloISO || "",
-        dataTitulo: dataTituloBR || "",
-        just: justFinal || "",
-        // campos do comprovante vêm de outras rotas
-        cnpj: (llm?.cnpj || "").trim(),
-        pcNumero: (llm?.pcNumero || "").trim(),
-      };
-
-      // Fallback cruzado usando outros documentos se ainda faltou algo
-      if (!merged.nf || !merged.data_emissao_iso) {
-        const texts = [oficioText, ordemText, cotText].filter(Boolean).join("\n");
-        if (!merged.nf) {
-          const got = extractNF9FromText(texts);
-          if (got?.nf_num_9) {
-            merged.nf = got.nf_num_9;
-            merged.nf_num_9 = got.nf_num_9;
-            merged.nf_num_9_mask = got.nf_num_9_mask;
-          }
-        }
-        if (!merged.data_emissao_iso) {
-          const d = extractIssueFromTextNF(texts);
-          if (d) {
-            merged.data_emissao_iso = d;
-            merged.dataTitulo = toBRDate(d);
-          }
-        }
-      }
-
-      // Se veio só "nf", derive máscara
-      if (!merged.nf_num_9 && merged.nf) {
-        const raw = onlyDigits(merged.nf);
-        if (raw.length >= 3 && raw.length <= 12) {
-          const nine = raw.padStart(9, "0").slice(-9);
-          merged.nf_num_9 = nine;
-          merged.nf_num_9_mask = mask9(nine);
-        }
-      }
+      const merged = await extractPurchaseDocData({
+        nfFile,
+        oficioFile,
+        ordemFile,
+        cotacoes: cots,
+      });
 
       return res.json({ ok: true, data: merged });
     } catch (err) {
