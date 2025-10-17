@@ -393,6 +393,21 @@ $$('[data-pick]').forEach((btn) => {
         console.log("[docfin] Objeto sugerido:", lastParsedDocs.cotacoes_objeto);
       }
 
+      const nfMask = lastParsedDocs.nf_num_9_mask || lastParsedDocs.nf_mask || "";
+      const nfNine = lastParsedDocs.nf_num_9 || lastParsedDocs.nf || "";
+      const nfDisplay = nfMask || (nfNine ? mask9(nfNine) : "");
+      const dataTituloISO = lastParsedDocs.data_emissao_iso || "";
+      const dataTituloBR = dataTituloISO ? formatDateBR(dataTituloISO) : (lastParsedDocs.dataTitulo || "");
+      const nfHint = $("#hint-nf");
+      if (nfHint && (nfDisplay || dataTituloBR)) {
+        const pieces = [];
+        if (nfDisplay) pieces.push(`NF: ${nfDisplay}`);
+        if (dataTituloBR) pieces.push(`Emissão: ${dataTituloBR}`);
+        nfHint.textContent = pieces.join(" • ");
+      }
+
+      await maybeAutoInsertRow("parse-docs");
+
     } else {
       console.warn("[docfin] parse-docs não OK:", j);
     }

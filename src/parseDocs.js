@@ -6,6 +6,7 @@ import Tesseract from "tesseract.js";
 import OpenAI from "openai";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import path from "node:path";
+import fs from "node:fs";
 
 const router = express.Router();
 router.use(express.json({ limit: "20mb" }));
@@ -38,6 +39,83 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
 });
+
+const runMulter = (req, res) => new Promise((resolve, reject) => {
+  upload.fields([
+    { name: "nf", maxCount: 1 },
+    { name: "oficio", maxCount: 1 },
+    { name: "ordem", maxCount: 1 },
+    { name: "cotacoes", maxCount: 10 },
+  ])(req, res, (err) => {
+    if (err) reject(err);
+    else resolve();
+  });
+});
+
+function normalizeIncomingFile(file) {
+  if (!file) return null;
+
+  const originalname =
+    file.originalname ||
+    file.name ||
+    file.filename ||
+    file.fileName ||
+    file.fieldname ||
+    "arquivo";
+
+  const mimetype = file.mimetype || file.type || "";
+
+  let buffer = null;
+  if (file.buffer) {
+    buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer);
+  } else if (file.data) {
+    buffer = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data);
+  } else if (file.tempFilePath) {
+    try {
+      buffer = fs.readFileSync(file.tempFilePath);
+    } catch {
+      buffer = null;
+    }
+  }
+
+  if (!buffer) return null;
+
+  const size = typeof file.size === "number" ? file.size : buffer.length;
+
+  return { originalname, mimetype, buffer, size };
+}
+
+const ensureArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  return [value];
+};
+
+async function collectFiles(req, res) {
+  const hasExpressFiles = req.files && Object.keys(req.files).length > 0;
+
+  if (!hasExpressFiles) {
+    await runMulter(req, res);
+  }
+
+  const src = (req.files && Object.keys(req.files).length > 0) ? req.files : {};
+
+  const normalizeGroup = (key) => ensureArray(src[key])
+    .map(normalizeIncomingFile)
+    .filter(Boolean);
+
+  const nfList = normalizeGroup("nf");
+  const oficioList = normalizeGroup("oficio");
+  const ordemList = normalizeGroup("ordem");
+  const cotList = normalizeGroup("cotacoes");
+
+  return {
+    nfFile: nfList[0] || null,
+    oficioFile: oficioList[0] || null,
+    ordemFile: ordemList[0] || null,
+    cotacoes: cotList,
+  };
+}
 
 /* ================= OpenAI (opcional) ================= */
 let openai = process.env.OPENAI_API_KEY
@@ -592,23 +670,13 @@ function pickPaymentDate(text = "") {
 }
 
 /* ================= ROTA: /parse-docs (NF/Ofício/Ordem/Cotações) ================= */
-router.post("/parse-docs", async (req, res, next) => {
-  if (!req.headers["content-type"]?.includes("multipart/form-data")) {
-    return res.status(400).json({ ok: false, message: "Conteúdo inválido (esperado multipart/form-data)" });
-  }
-  next();
-}, upload.fields([
-  { name: "nf", maxCount: 1 },
-  { name: "oficio", maxCount: 1 },
-  { name: "ordem", maxCount: 1 },
-  { name: "cotacoes", maxCount: 10 },
-]),
-async (req, res) => {
+router.post("/parse-docs", async (req, res) => {
   try {
-    const nfFile     = (req.files?.nf || [])[0];
-    const oficioFile = (req.files?.oficio || [])[0];
-    const ordemFile  = (req.files?.ordem || [])[0];
-    const cots       = (req.files?.cotacoes || []);
+    if (!req.headers["content-type"]?.includes("multipart/form-data")) {
+      return res.status(400).json({ ok: false, message: "Conteúdo inválido (esperado multipart/form-data)" });
+    }
+
+    const { nfFile, oficioFile, ordemFile, cotacoes: cots } = await collectFiles(req, res);
 
     // 1) Campos fortes diretamente da NF
     let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
