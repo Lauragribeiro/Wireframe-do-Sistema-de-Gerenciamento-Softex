@@ -3,7 +3,7 @@
 import express from "express";
 import multer from "multer";
 import Tesseract from "tesseract.js";
-import OpenAI from "openai";
+import { ensureOpenAIClient, invalidateOpenAIClient } from "./openaiProvider.js";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import path from "node:path";
 import fs from "node:fs";
@@ -118,9 +118,7 @@ async function collectFiles(req, res) {
 }
 
 /* ================= OpenAI (opcional) ================= */
-let openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
+let openai = ensureOpenAIClient();
 
 /* ================= Helpers base ================= */
 const onlyDigits = (s) => (String(s || "").match(/\d+/g) || []).join("");
@@ -487,6 +485,7 @@ function normalizeCotacaoProposta(entry, idx = 0) {
 }
 
 async function analyzeCotacoesWithLLM(namedTexts = []) {
+  if (!openai) openai = ensureOpenAIClient();
   if (!openai) return null;
   const sections = namedTexts
     .map((item, idx) => {
@@ -558,6 +557,7 @@ function markOpenAIDisabledIfAuthError(err) {
   const code = err?.status || err?.statusCode || err?.code || err?.error?.code;
   const msg  = String(err?.message || "").toLowerCase();
   if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
+    invalidateOpenAIClient();
     openai = null;
   }
 }
@@ -585,6 +585,7 @@ function extractJsonSafe(str) {
 }
 
 async function callLLMJson(messages) {
+  if (!openai) openai = ensureOpenAIClient();
   if (!openai) return null;
   try {
     const r = await openai.chat.completions.create({

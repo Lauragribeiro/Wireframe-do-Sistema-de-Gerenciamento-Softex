@@ -10,15 +10,10 @@ dayjs.locale("pt-br");
 
 import { buildPayloadBase } from "./utils/docxPayload.js";
 import { ensureFields, REQUIRED_MAPA, REQUIRED_FOLHA } from "./utils/templateGuards.js";
+import { ensureOpenAIClient, hasOpenAIKey, invalidateOpenAIClient } from "./openaiProvider.js";
 
 /** ===== OpenAI opcional (para extrair dados das cotações) ===== */
-const hasOpenAI = !!process.env.OPENAI_API_KEY;
-let OpenAI = null;
-if (hasOpenAI) {
-  try {
-    OpenAI = (await import("openai")).default;
-  } catch (_) {}
-}
+const hasOpenAI = hasOpenAIKey();
 
 /* ========================= Utils ========================= */
 const __dirnameLocal = path.resolve();
@@ -200,9 +195,10 @@ async function buildPropostasFromFilenames(names = []) {
 
 /* ============ AI helper (opcional) para ler cotações ============ */
 async function extractCotacoesWithAI(cotacoes = []) {
-  if (!hasOpenAI || !OpenAI) return [];
+  if (!hasOpenAI) return [];
   try {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const client = ensureOpenAIClient();
+    if (!client) return [];
     const joined = cotacoes
       .map((c, i) => `### COTAÇÃO ${i + 1} (${c.name})\n${(c.text || "").slice(0, 20000)}`)
       .join("\n\n");
@@ -235,6 +231,11 @@ Retorne um JSON com a lista "propostas", onde cada item possui:
       valor:    typeof p.valor === "string" && p.valor.includes("R$") ? p.valor : fmtBRL(p.valor),
     }));
   } catch (err) {
+    const code = err?.status || err?.statusCode || err?.code;
+    const msg  = String(err?.message || "").toLowerCase();
+    if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
+      invalidateOpenAIClient();
+    }
     console.warn("[extractCotacoesWithAI] falhou, seguindo sem AI:", err?.message || err);
     return [];
   }

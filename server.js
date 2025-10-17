@@ -23,6 +23,7 @@ import parseDocsRouter                 from "./src/parseDocs.js";
 import vendorsRouter                   from "./src/vendors.js";
 // import purchasesRouter               from "./src/purchases.js"; // ⇐ NÃO usar (router interno abaixo)
 import generateDocsRouter, { registerDocRoutes } from "./src/generateDocs.js";
+import { ensureOpenAIClient, hasOpenAIKey, invalidateOpenAIClient } from "./src/openaiProvider.js";
 import cnpjProxyRouter                 from "./src/cnpjProxy.js";
 
 // __dirname helpers (ESM)
@@ -38,15 +39,7 @@ const PURCHASES_FILE= join(DATA_DIR, "purchases.json");
 const TEMPLATE_BASE = join(__dirname, "src", "templates");
 
 // ===== OpenAI opcional =====
-const hasOpenAI = !!process.env.OPENAI_API_KEY;
-let OpenAI = null;
-if (hasOpenAI) {
-  try {
-    OpenAI = (await import("openai")).default;
-  } catch {
-    console.warn("[OpenAI] não instalado; prosseguindo sem IA.");
-  }
-}
+const hasOpenAI = hasOpenAIKey();
 
 /* ========================================================================== *
  *  Preparação de diretórios
@@ -733,7 +726,7 @@ app.use("/api", cnpjProxyRouter);
 app.use("/api", docRouter);
 
 // Expor base de templates e registrar rotas de geração (seu módulo)
-const openai = process.env.OPENAI_API_KEY ? null : null;
+const openai = ensureOpenAIClient();
 registerDocRoutes(app, { openai, TEMPLATE_BASE });
 
 /* ========================================================================== *
@@ -890,9 +883,10 @@ async function ensureCotacoesText(cotacoes = []) {
 }
 
 async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotacoes = [] } = {}) {
-  if (!hasOpenAI || !OpenAI) return { objeto: "", propostas: [] };
+  if (!hasOpenAI) return { objeto: "", propostas: [] };
   try {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const client = ensureOpenAIClient();
+    if (!client) return { objeto: "", propostas: [] };
     const blocks = (cotacoes || [])
       .map((c, idx) => {
         const name = c?.name || c?.filename || c?.fileName || `Cotacao_${idx + 1}`;
@@ -931,6 +925,11 @@ async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotac
 
     return { objeto, propostas };
   } catch (err) {
+    const code = err?.status || err?.statusCode || err?.code;
+    const msg  = String(err?.message || "").toLowerCase();
+    if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
+      invalidateOpenAIClient();
+    }
     console.warn("[mapa] extractFromCotacoesWithAI falhou:", err?.message || err);
     return { objeto: "", propostas: [] };
   }
