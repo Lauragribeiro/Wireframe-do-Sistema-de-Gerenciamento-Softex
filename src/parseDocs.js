@@ -1,109 +1,210 @@
 // src/parseDocs.js
-// PDF → texto (pdfjs-dist → pdf-parse → OCR com canvas+Tesseract),
-// OCR de imagem, NF número curto, JUST do ofício, data do pagamento heurística,
-// **NOVO**: número da NF com 9 dígitos (zeros à esquerda + máscara) e data de emissão.
 
 import express from "express";
 import multer from "multer";
 import Tesseract from "tesseract.js";
 import OpenAI from "openai";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import path from "node:path";
 
 const router = express.Router();
 router.use(express.json({ limit: "20mb" }));
 
+/* ================= PDF.js Config (Node/ESM) ================= */
+try {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = path.join(
+    process.cwd(),
+    "node_modules/pdfjs-dist/build/pdf.worker.mjs"
+  );
+  pdfjsLib.GlobalWorkerOptions.standardFontDataUrl = path.join(
+    process.cwd(),
+    "node_modules/pdfjs-dist/standard_fonts/"
+  );
+  pdfjsLib.GlobalWorkerOptions.cMapUrl = path.join(
+    process.cwd(),
+    "node_modules/pdfjs-dist/cmaps/"
+  );
+  pdfjsLib.GlobalWorkerOptions.cMapPacked = true;
+
+  if (typeof pdfjsLib.setVerbosity === "function") {
+    pdfjsLib.setVerbosity(pdfjsLib.VerbosityLevel.ERROR);
+  }
+} catch (e) {
+  console.warn("[pdfjs setup] falhou:", e?.message);
+}
+
+/* ================= Multer (memória) ================= */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
 });
 
+/* ================= OpenAI (opcional) ================= */
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-/* ========== helpers base ========== */
+/* ================= Helpers base ================= */
 const onlyDigits = (s) => (String(s || "").match(/\d+/g) || []).join("");
-function mask9(nine){ return nine.replace(/(\d{3})(\d{3})(\d{3})/, "$1.$2.$3"); }
 const norm = (s = "") => String(s).replace(/\s+/g, " ").trim();
+const clamp = (n, a, b) => Math.min(Math.max(n, a), b);
+const mask9 = (nine) => nine.replace(/(\d{3})(\d{3})(\d{3})/, "$1.$2.$3");
 
-function logShort(label, text) {
-  const t = String(text || "");
-  console.log(label, "len:", t.length, "| head:", t.slice(0, 140).replace(/\s+/g, " "));
-}
-
-const toISO = (s) => {
+function toISO(s) {
   if (!s) return null;
   let m = String(s).match(/(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   m = String(s).match(/(\d{4})[\/.\-](\d{2})[\/.\-](\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-};
+}
+function toBRDate(iso) {
+  if (!iso) return "";
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return "";
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
 
-/* ========== PATCH 1: helpers NF (XML e texto) ========== */
+/* ================= NF helpers ================= */
 function nf9(n) {
   const nine = onlyDigits(n).padStart(9, "0").slice(-9);
   return { nf_num_9: nine, nf_num_9_mask: mask9(nine) };
 }
 
 // XML NF-e → número curto e data de emissão (<dhEmi> ou <dEmi>)
+// XML NF-e → número curto e data (prioridade: Emissão → Saída)
 function extractFromXml(xmlStr = "") {
   const numRaw = (xmlStr.match(/<nNF>(\d+)<\/nNF>/) || [])[1] || "";
   const { nf_num_9, nf_num_9_mask } = nf9(numRaw);
 
+  // Emissão
   let data_emissao_iso = null;
-  const mDh = xmlStr.match(/<dhEmi>([^<]+)<\/dhEmi>/);
-  if (mDh && mDh[1]) {
-    const d = new Date(mDh[1].trim());
-    data_emissao_iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  } else {
-    const mD = xmlStr.match(/<dEmi>([^<]+)<\/dEmi>/);
-    if (mD && mD[1]) data_emissao_iso = mD[1].trim(); // já vem YYYY-MM-DD
+  const mDhEmi = xmlStr.match(/<dhEmi>([^<]+)<\/dhEmi>/);
+  if (mDhEmi && mDhEmi[1]) {
+    const d = new Date(mDhEmi[1].trim());
+    if (!isNaN(d.getTime())) {
+      data_emissao_iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
   }
+  if (!data_emissao_iso) {
+    const mDEmi = xmlStr.match(/<dEmi>([^<]+)<\/dEmi>/);
+    if (mDEmi && mDEmi[1]) data_emissao_iso = toISO(mDEmi[1].trim()) || mDEmi[1].trim();
+  }
+
+  // Saída (só se emissão não veio)
+  if (!data_emissao_iso) {
+    const mDhSai = xmlStr.match(/<dhSaiEnt>([^<]+)<\/dhSaiEnt>/);
+    if (mDhSai && mDhSai[1]) {
+      const d = new Date(mDhSai[1].trim());
+      if (!isNaN(d.getTime())) {
+        data_emissao_iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      }
+    }
+    if (!data_emissao_iso) {
+      const mDSai = xmlStr.match(/<dSaiEnt>([^<]+)<\/dSaiEnt>/);
+      if (mDSai && mDSai[1]) data_emissao_iso = toISO(mDSai[1].trim()) || mDSai[1].trim();
+    }
+  }
+
   return { nf_num_9, nf_num_9_mask, data_emissao_iso };
 }
 
-// PDF/DANFE/Imagem → data de emissão
-function extractIssueFromText(txt = "") {
-  const rx = [
-    /data\s*de\s*emiss[aã]o\s*[:\-]?\s*(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/i,
-    /emiss[aã]o\s*[:\-]?\s*(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/i,
-    /danfe[^\n]{0,40}emitid[ao]\s*em\s*(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/i
-  ];
-  for (const r of rx) {
-    const m = txt.match(r);
-    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+// PDF/DANFE/Imagem → data de emissão (DD/MM/AAAA → YYYY-MM-DD)
+// NF em texto → data (prioridade: Emissão → Saída), só a partir da NF
+function extractIssueFromTextNF(txt = "") {
+  if (!txt) return null;
+  const t = String(txt).replace(/\s+/g, " ").toLowerCase();
+
+  const anchorsEmissao = ["data da emissão", "data de emissão", "emissão", "emitido em", "emitida em"];
+  const anchorsSaida   = ["data da saída", "data de saída", "saída"];
+  const dateRx = /(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/g;
+
+  // retorna a primeira data APÓS a âncora, num raio curto
+  const findAfter = (anchors) => {
+    for (const a of anchors) {
+      let pos = t.indexOf(a);
+      if (pos === -1) continue;
+      // procura data nos próximos ~60 caracteres após a âncora
+      const window = t.slice(pos, pos + 120);
+      const m = window.match(/(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+    return null;
+  };
+
+  // 1) Emissão
+  let iso = findAfter(anchorsEmissao);
+  if (iso) return iso;
+
+  // 2) Saída
+  iso = findAfter(anchorsSaida);
+  if (iso) return iso;
+
+  // 3) Fallback muito conservador: primeira data do documento (evita datas aleatórias)
+  let m;
+  while ((m = dateRx.exec(t))) {
+    // ignore datas seguidas por palavras típicas que não são emissão/saída
+    const tail = t.slice(m.index - 15, m.index + 15);
+    if (!/venc|pag|protoc|receb|compet|em\s*\d{4}/.test(tail)) {
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
   }
   return null;
 }
 
-// PDF/DANFE/Imagem → número curto normalizado para 9 dígitos
+// PDF/DANFE/Imagem → número curto da NF (ex.: "000.000.123")
 function extractNF9FromText(txt = "") {
-  const t = norm(txt);
-  const m =
-    t.match(/(?:n[úu]mero|n[ºo]|n°|no\.?)\s*(?:da\s*)?(?:nf-?e|nota\s*fiscal)[^\d]{0,15}(\d[\d\.\s]{1,20})/i) ||
-    t.match(/nf-?e[^\d]{0,15}(\d[\d\.\s]{1,20})/i) ||
-    t.match(/danfe[^\d]{0,15}(\d[\d\.\s]{1,20})/i);
-  const raw = m ? onlyDigits(m[1]) : "";
-  return nf9(raw);
+  if (!txt) return { nf_num_9: "", nf_num_9_mask: "" };
+  const t = String(txt).replace(/\s+/g, " ");
+
+  const nearNF = [
+    /(?:nf[\s-]*e|nota\s*fiscal|danfe)[^]{0,80}?(?:n[º°o\.]|nro|no)\s*[:\-]?\s*([0-9.\s]{3,20})/i,
+    /(?:n[º°o\.]|nro|no)\s*[:\-]?\s*([0-9.\s]{3,20})\s*(?:\/\s*serie|\bser[ií]e\b|(?:da)?\s*nf[\s-]*e|danfe)/i
+  ];
+  for (const rx of nearNF) {
+    const m = t.match(rx);
+    if (m && m[1]) {
+      const d = m[1].replace(/[^\d]/g, "");
+      if (d.length >= 3 && d.length <= 12) {
+        const nine = d.padStart(9, "0").slice(-9);
+        return { nf_num_9: nine, nf_num_9_mask: mask9(nine) };
+      }
+    }
+  }
+
+  const generic = /\b(?:nf[\s-]*e|danfe)\b[^]{0,60}?([\d.\s]{3,20})/i.exec(t);
+  if (generic && generic[1]) {
+    const d = generic[1].replace(/[^\d]/g, "");
+    if (d.length >= 3 && d.length <= 12) {
+      const nine = d.padStart(9, "0").slice(-9);
+      return { nf_num_9: nine, nf_num_9_mask: mask9(nine) };
+    }
+  }
+
+  return { nf_num_9: "", nf_num_9_mask: "" };
 }
 
-/* ========== tipos corretos para cada lib ========== */
-// SEMPRE entregar Uint8Array “puro” ao pdfjs-dist
+/* ================= Tipos para pdfjs/pdf-parse ================= */
 function toUint8Array(input) {
   if (Buffer.isBuffer(input)) return new Uint8Array(input);
   if (input instanceof Uint8Array) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
   if (input instanceof ArrayBuffer) return new Uint8Array(input);
   return new Uint8Array(Buffer.from(input));
 }
-// SEMPRE entregar Buffer do Node ao pdf-parse
 function toNodeBuffer(input) {
   return Buffer.isBuffer(input) ? input : Buffer.from(input);
 }
 
-/* ========== PDF → texto (3 camadas) ========== */
+/* ================= PDF → texto (3 camadas) ================= */
 async function pdfBufferToText_pdfjs(buffer) {
   const typed = toUint8Array(buffer);
-  const loadingTask = pdfjsLib.getDocument({ data: typed });
+  const loadingTask = pdfjsLib.getDocument({
+    data: typed,
+    standardFontDataUrl: pdfjsLib.GlobalWorkerOptions.standardFontDataUrl,
+    cMapUrl: pdfjsLib.GlobalWorkerOptions.cMapUrl,
+    cMapPacked: true,
+    useSystemFonts: true,
+    disableFontFace: true,
+  });
   const pdf = await loadingTask.promise;
   let text = "";
   for (let p = 1; p <= pdf.numPages; p++) {
@@ -113,7 +214,6 @@ async function pdfBufferToText_pdfjs(buffer) {
   }
   return text;
 }
-
 async function pdfBufferToText_pdfparse(buffer) {
   try {
     const mod = await import("pdf-parse");
@@ -125,19 +225,24 @@ async function pdfBufferToText_pdfparse(buffer) {
     return "";
   }
 }
-
-// OCR de PDF escaneado (renderiza com pdfjs → reconhece com Tesseract). Requer `canvas`.
 async function pdfBufferToText_ocr(buffer) {
   let canvasMod = null;
   try {
     canvasMod = await import("canvas"); // opcional
   } catch {
-    return ""; // sem canvas instalado
+    return "";
   }
   const { createCanvas } = canvasMod.default || canvasMod;
 
   const typed = toUint8Array(buffer);
-  const loadingTask = pdfjsLib.getDocument({ data: typed });
+  const loadingTask = pdfjsLib.getDocument({
+    data: typed,
+    standardFontDataUrl: pdfjsLib.GlobalWorkerOptions.standardFontDataUrl,
+    cMapUrl: pdfjsLib.GlobalWorkerOptions.cMapUrl,
+    cMapPacked: true,
+    useSystemFonts: true,
+    disableFontFace: true,
+  });
   const pdf = await loadingTask.promise;
   let full = "";
 
@@ -155,11 +260,7 @@ async function pdfBufferToText_ocr(buffer) {
     const page = await pdf.getPage(p);
     const viewport = page.getViewport({ scale: 2.0 });
     const cf = CanvasFactory.create(viewport.width, viewport.height);
-    const renderContext = {
-      canvasContext: cf.context,
-      viewport,
-      canvasFactory: CanvasFactory,
-    };
+    const renderContext = { canvasContext: cf.context, viewport, canvasFactory: CanvasFactory };
     await page.render(renderContext).promise;
     const pngBuffer = cf.canvas.toBuffer("image/png");
     const { data: { text } } = await Tesseract.recognize(pngBuffer, "por+eng");
@@ -168,7 +269,6 @@ async function pdfBufferToText_ocr(buffer) {
   }
   return full;
 }
-
 async function pdfBufferToText(buffer) {
   try {
     const t1 = await pdfBufferToText_pdfjs(buffer);
@@ -178,11 +278,9 @@ async function pdfBufferToText(buffer) {
   }
   const t2 = await pdfBufferToText_pdfparse(buffer);
   if (t2 && t2.trim().length > 20) return t2;
-
   const t3 = await pdfBufferToText_ocr(buffer);
   return t3 || "";
 }
-
 async function fileToText(file) {
   if (!file) return "";
   const mime = file.mimetype || "";
@@ -192,14 +290,15 @@ async function fileToText(file) {
       const { data: { text } } = await Tesseract.recognize(file.buffer, "por+eng");
       return text || "";
     }
+    // textos/OFX/XML: devolve como string
+    return file.buffer.toString("utf-8");
   } catch (e) {
     console.warn("[parseDocs] falha lendo", file?.originalname, e?.message);
   }
   return "";
 }
 
-/* ========== extrações (regex) ========== */
-// NF-e (número curto: 3–12 dígitos; nunca chave de 44) — legado p/ compat
+/* ================= Extrações (regex/heurísticas) ================= */
 function extractNF_local(text = "") {
   const t = norm(text);
   const cands = [
@@ -216,24 +315,60 @@ function extractNF_local(text = "") {
   }
   return "";
 }
-
-// JUST do ofício
 function extractJust_local(text = "") {
   const t = norm(text);
-  let m = t.match(/\bJustificativa\b\s*[:\-]\s*(.+?)(?:\.\s+[A-ZÁÉÍÓÚ]|$)/i);
-  if (m && m[1]) return m[1].trim();
-  m = t.match(/([^.]{20,260}justific[aá][^\.]{0,260}\.)/i);
-  if (m && m[1]) return m[1].trim();
-  m = t.match(/\bSolicita(?:-se)?\b\s*[:\-]\s*(.{20,260}?\.)/i);
+  let m =
+    t.match(/\bjustificativa(?:\s+para\s+(?:compra|aquisição))?\b\s*[:\-–]\s*(.{10,400}?)(?:\.($|\s[A-ZÁÉÍÓÚ]))/i) ||
+    t.match(/([^.]{20,400}justific[aá][^.]{0,400}\.)/i) ||
+    t.match(/\bsolicita(?:-se)?\b\s*[:\-–]\s*(.{20,400}?\.)/i);
   return (m && m[1]) ? m[1].trim() : "";
 }
 
-/* ========== LLM (opcional: reforço) ========== */
-function buildMessages({ nfText, oficioText }) {
+/* ================= LLM helpers ================= */
+// Tenta extrair JSON mesmo que venha cercado por ```json ... ```
+function extractJsonSafe(str) {
+  if (!str) return null;
+  let s = String(str).trim();
+
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) s = fenced[1].trim();
+
+  const start = s.indexOf("{");
+  const end   = s.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    s = s.slice(start, end + 1);
+  }
+
+  s = s.replace(/,\s*([}\]])/g, "$1");
+
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+async function callLLMJson(messages) {
+  if (!openai) return null;
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages,
+    });
+    const txt = r?.choices?.[0]?.message?.content ?? "";
+    return extractJsonSafe(txt);
+  } catch (e) {
+    console.warn("[LLM] falhou:", e?.message);
+    return null;
+  }
+}
+
+function messagesForDocs({ nfText, oficioText, ordemText, cotText }) {
   const system = {
     role: "system",
     content:
-`Responda ESTRITAMENTE com JSON válido com TODAS as chaves:
+`Responda apenas com JSON válido com TODAS as chaves:
 {
   "cnpj": "",
   "nf": "",
@@ -246,59 +381,42 @@ function buildMessages({ nfText, oficioText }) {
   "mesLabel": ""
 }
 Regras:
-- "nf": somente o número curto da NF-e (3–12 dígitos). Nunca a CHAVE DE ACESSO (44 dígitos). Sem pontos/hífens.
-- "just": frase curta do Ofício de Solicitação.
-- Demais chaves vazias (""/null). Não invente dados.`
+- "nf": apenas número curto (3–12 dígitos). Nunca a chave de 44 dígitos.
+- "dataTitulo": data de emissão da NF em YYYY-MM-DD.
+- Use vazio ("")/null quando não tiver certeza. Não invente.`
   };
   const user = {
     role: "user",
     content:
-`#### NOTA FISCAL
+`##### NOTA FISCAL
 ${nfText || "(vazio)"}
 
-#### OFÍCIO
-${oficioText || "(vazio)"}`
-  };
+##### OFÍCIO
+${oficioText || "(vazio)"}
+
+##### ORDEM
+${ordemText || "(vazio)"}
+
+##### COTAÇÕES
+${cotText || "(vazio)"}
+`};
   return [system, user];
 }
 
-async function callLLM(messages) {
-  if (!openai) return null;
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages
-    });
-    const txt = r?.choices?.[0]?.message?.content?.trim();
-    if (!txt) return null;
-    const m = txt.match(/\{[\s\S]*\}$/);
-    const jsonStr = m ? m[0] : txt;
-    return JSON.parse(jsonStr);
-  } catch (e) {
-    console.warn("[LLM] falhou:", e?.message);
-    return null;
-  }
-}
-
-/* ========== Heurística “Data do pagamento” (comprovante) ========== */
+/* ================= Heurística Data do pagamento (comprovante) ================= */
 function pickPaymentDate(text = "") {
   const raw = String(text || "");
   const lower = raw.toLowerCase();
-
   const dateRegex = /(\d{2}[\/.\-]\d{2}[\/.\-]\d{4}|\d{4}[\/.\-]\d{2}[\/.\-]\d{2})/g;
   const dates = [];
   let m;
-  while ((m = dateRegex.exec(raw))) {
-    dates.push({ str: m[1], idx: m.index });
-  }
+  while ((m = dateRegex.exec(raw))) dates.push({ str: m[1], idx: m.index });
   if (!dates.length) return null;
 
   const keys = ["data do pagamento", "pagamento", "pgto", "liquidação", "liquidacao", "compensação", "compensacao"];
   const keyPos = [];
   for (const k of keys) {
-    let pos = -1;
-    const lk = k.toLowerCase();
+    let pos = -1, lk = k.toLowerCase();
     while ((pos = lower.indexOf(lk, pos + 1)) !== -1) keyPos.push(pos);
   }
   if (!keyPos.length) return toISO(dates[0].str);
@@ -312,21 +430,27 @@ function pickPaymentDate(text = "") {
   return toISO(best.str);
 }
 
-/* ========== /parse-docs (NF/Ofício) ========== */
-router.post(
-  "/parse-docs",
-  upload.fields([
-    { name: "nf", maxCount: 1 },
-    { name: "oficio", maxCount: 1 },
-    { name: "ordem", maxCount: 1 },
-    { name: "cotacoes", maxCount: 10 },
-  ]),
+/* ================= ROTA: /parse-docs (NF/Ofício/Ordem/Cotações) ================= */
+router.post("/parse-docs", async (req, res, next) => {
+  if (!req.headers["content-type"]?.includes("multipart/form-data")) {
+    return res.status(400).json({ ok: false, message: "Conteúdo inválido (esperado multipart/form-data)" });
+  }
+  next();
+}, upload.fields([
+  { name: "nf", maxCount: 1 },
+  { name: "oficio", maxCount: 1 },
+  { name: "ordem", maxCount: 1 },
+  { name: "cotacoes", maxCount: 10 },
+]),
+ async (req, res) => 
   async (req, res) => {
     try {
       const nfFile     = (req.files?.nf || [])[0];
       const oficioFile = (req.files?.oficio || [])[0];
+      const ordemFile  = (req.files?.ordem || [])[0];
+      const cots       = (req.files?.cotacoes || []);
 
-      // === PATCH 2A: extrair número e data de emissão diretamente da NF
+      // 1) Campos fortes diretamente da NF
       let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
       if (nfFile) {
         const name = (nfFile.originalname || "").toLowerCase();
@@ -336,51 +460,92 @@ router.post(
         } else {
           const maybeText = await fileToText(nfFile); // PDF/Imagem → texto
           const { nf_num_9, nf_num_9_mask } = extractNF9FromText(maybeText);
-          const data_emissao_iso = extractIssueFromText(maybeText);
+          const data_emissao_iso = extractIssueFromTextNF(maybeText);
           nfFields = { nf_num_9, nf_num_9_mask, data_emissao_iso };
         }
       }
 
-      // Ainda geramos os textos para logs/LLM/justificativa
+      // 2) Textos para heurísticas + LLM
       const nfText     = await fileToText(nfFile);
       const oficioText = await fileToText(oficioFile);
+      const ordemText  = await fileToText(ordemFile);
+      const cotText    = (await Promise.all(cots.map(fileToText))).join("\n---\n");
 
-      logShort("[DBG] NF text", nfText);
-      logShort("[DBG] Ofício text", oficioText);
-
-      // Legado/compat: nf curto e just por heurística + LLM
+      // heurísticas
       const localNF   = extractNF_local(nfText);
-      const localJust = extractJust_local(oficioText);
+      const localJust = extractJust_local(`${oficioText}\n${ordemText}`);
 
-      const llm = await callLLM(buildMessages({ nfText, oficioText }));
+      // 3) LLM (opcional)
+      const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
+      const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
 
-      let nfFinal = localNF;
-      if (llm?.nf) {
-        const n = onlyDigits(llm.nf);
-        if (n.length >= 3 && n.length <= 12) nfFinal = n;
+      // 4) Merge — NF
+      let nfFinal = null;
+      if (nfFields.nf_num_9) {
+        nfFinal = nfFields.nf_num_9;
+      } else {
+        const fromText = extractNF9FromText(nfText || "");
+        nfFinal = fromText.nf_num_9 || onlyDigits(localNF) || onlyDigits(llm?.nf || "");
+        if (nfFinal) nfFinal = String(nfFinal).padStart(9, "0").slice(-9);
       }
-      if (onlyDigits(nfFinal).length >= 14) nfFinal = localNF || "";
+      const nfMask = nfFinal ? mask9(nfFinal) : null;
 
-      const justFinal = (llm?.just?.trim?.()) || localJust || "";
+      // 4) Merge — Data do título
+  
+      const dataTituloISO =
+      nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
+      extractIssueFromTextNF(nfText || "") ||      // PDF/Imagem: Emissão → Saída
+    null;
 
-      // === PATCH 2B: objeto final com novos campos e compatibilidade
-      const data = {
-        cnpj: "",
-        nf: nfFinal || (nfFields.nf_num_9 ?? "") || "", // legado (sem máscara)
-        nf_num_9: nfFields.nf_num_9,                   // "000071501"
-        nf_num_9_mask: nfFields.nf_num_9_mask,         // "000.071.501"
-        data_emissao_iso: nfFields.data_emissao_iso,   // "YYYY-MM-DD"
-        nExtrato: "",
-        dataTitulo: nfFields.data_emissao_iso || "",   // compat: front já usa dataTitulo
-        dataPagamento: "",
-        valor: null,
-        just: justFinal,
-        pcNumero: "",
-        mesLabel: ""
+     const dataTituloBR = toBRDate(dataTituloISO || "");
+
+      // 4) Merge — Justificativa
+      let justFinal = (localJust || "").trim();
+      if (!justFinal && llm?.just) justFinal = String(llm.just).trim();
+
+      const merged = {
+        nf: nfFinal || "",
+        nf_num_9: nfFinal || null,
+        nf_num_9_mask: nfMask,
+        data_emissao_iso: dataTituloISO || "",
+        dataTitulo: dataTituloBR || "",
+        just: justFinal || "",
+        // campos do comprovante vêm de outras rotas
+        cnpj: (llm?.cnpj || "").trim(),
+        pcNumero: (llm?.pcNumero || "").trim(),
       };
 
-      console.log("[/parse-docs] => nf:", data.nf || "(vazio)", "| nf9:", data.nf_num_9_mask || "(—)", "| emissao:", data.data_emissao_iso || "(—)", "| just? ", !!data.just);
-      return res.json({ ok: true, data });
+      // Fallback cruzado usando outros documentos se ainda faltou algo
+      if (!merged.nf || !merged.data_emissao_iso) {
+        const texts = [oficioText, ordemText, cotText].filter(Boolean).join("\n");
+        if (!merged.nf) {
+          const got = extractNF9FromText(texts);
+          if (got?.nf_num_9) {
+            merged.nf = got.nf_num_9;
+            merged.nf_num_9 = got.nf_num_9;
+            merged.nf_num_9_mask = got.nf_num_9_mask;
+          }
+        }
+        if (!merged.data_emissao_iso) {
+          const d = extractIssueFromTextNF(texts);
+          if (d) {
+            merged.data_emissao_iso = d;
+            merged.dataTitulo = toBRDate(d);
+          }
+        }
+      }
+
+      // Se veio só "nf", derive máscara
+      if (!merged.nf_num_9 && merged.nf) {
+        const raw = onlyDigits(merged.nf);
+        if (raw.length >= 3 && raw.length <= 12) {
+          const nine = raw.padStart(9, "0").slice(-9);
+          merged.nf_num_9 = nine;
+          merged.nf_num_9_mask = mask9(nine);
+        }
+      }
+
+      return res.json({ ok: true, data: merged });
     } catch (err) {
       console.error("parse-docs error", err);
       return res.status(500).json({ ok: false, message: "Erro ao processar documentos" });
@@ -388,7 +553,7 @@ router.post(
   }
 );
 
-/* ========== /extrair-documento-imagem (comprovante colado) ========== */
+/* ================= ROTA: /extrair-documento-imagem (comprovante colado) ================= */
 router.post("/extrair-documento-imagem", async (req, res) => {
   try {
     const { image_data_url } = req.body || {};
@@ -396,10 +561,28 @@ router.post("/extrair-documento-imagem", async (req, res) => {
 
     const base64 = String(image_data_url).split(",")[1];
     const buffer = Buffer.from(base64, "base64");
-
     const { data: { text } } = await Tesseract.recognize(buffer, "por+eng");
-    const dateISO = pickPaymentDate(text);
 
+    if (openai) {
+      const messages = [
+        { role: "system", content:
+`Responda apenas com JSON no formato:
+{
+  "data_pagamento":{"iso": "YYYY-MM-DD"},
+  "numero_extrato":{"raw": "string"},
+  "valor_pago":{"raw":"string","valor_pago_num": number|null},
+  "mes_ano_pagamento":{"mes":"MM","ano":"YYYY"},
+  "mes_ao_pagamento":{"mes":"MM","ano":"YYYY"}
+}` },
+        { role: "user", content: `Texto do comprovante:\n${text}` }
+      ];
+      const jRaw = await callLLMJson(messages);
+      const j = (jRaw && typeof jRaw === "object" && jRaw.data) ? jRaw.data : jRaw;
+      if (j) return res.json(j);
+    }
+
+    // Fallback heurístico local
+    const iso = pickPaymentDate(text) || "";
     const mDoc = text.match(/(nr\.?\s*(?:do\s*)?documento|n[ºo]\s*(?:do\s*)?documento|nro\s*documento|nº\s*doc\.?|no\s*documento)\s*[:\-–]?\s*([A-Z0-9\-\.\/]{4,})/i);
     const nExtrato = mDoc ? mDoc[2].trim() : "";
 
@@ -409,21 +592,106 @@ router.post("/extrair-documento-imagem", async (req, res) => {
       const v = parseFloat(mVal[1].replace(",", "."));
       if (!Number.isNaN(v)) valor = v;
     }
+    const valRaw = (mVal && mVal[1]) ? mVal[1] : (valor != null ? String(valor).replace(".", ",") : "");
 
     let mes = null, ano = null;
     const mMY = text.match(/(\d{2})[\/\-](\d{4})/);
-    if (mMY) { mes = parseInt(mMY[1], 10); ano = parseInt(mMY[2], 10); }
+    if (mMY) { mes = clamp(parseInt(mMY[1], 10), 1, 12); ano = parseInt(mMY[2], 10); }
 
-    console.log("[/extrair-documento-imagem] =>", { date: dateISO, nExtrato, valor, mes, ano });
     return res.json({
-      data_pagamento: dateISO ? { iso: dateISO } : null,
-      numero_extrato: nExtrato ? { raw: nExtrato } : null,
-      valor_pago: valor != null ? { raw: String(valor).replace(".", ","), valor_pago_num: valor } : null,
+      data_pagamento: { iso },
+      numero_extrato: { raw: nExtrato || "" },
+      valor_pago: { raw: valRaw || "", valor_pago_num: valor ?? null },
+      mes_ao_pagamento: (mes && ano) ? { mes, ano } : null,
       mes_ano_pagamento: (mes && ano) ? { mes, ano } : null
     });
   } catch (err) {
     console.error("extrair-documento-imagem error", err);
     return res.status(500).send("Erro ao extrair imagem");
+  }
+});
+
+/* ================= ROTA: /extrair-ofx (arquivo OFX) ================= */
+router.post("/extrair-ofx", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "missing_file" });
+    const text = req.file.buffer.toString("utf-8");
+
+    if (openai) {
+      const messages = [
+        { role: "system", content:
+`Você extrairá dados de um OFX. Responda apenas com JSON:
+{
+  "data_pagamento":{"iso":"YYYY-MM-DD"},
+  "numero_extrato":{"raw":"string"},
+  "valor_pago":{"raw":"string","valor_pago_num": number|null},
+  "mes_ano_pagamento":{"mes":"MM","ano":"YYYY"},
+  "mes_ao_pagamento":{"mes":"MM","ano":"YYYY"}
+}` },
+        { role: "user", content: text.slice(0, 180000) }
+      ];
+      const j = await callLLMJson(messages);
+      if (j) return res.json(j);
+    }
+
+    // Fallback simples local (OFX)
+    const get = (rx) => (text.match(rx) || [,""])[1].trim();
+    let dt = get(/<DTPOSTED>(\d{8})/i);
+    let iso = "";
+    if (dt && dt.length === 8) iso = `${dt.slice(0,4)}-${dt.slice(4,6)}-${dt.slice(6,8)}`;
+
+    let valRaw = get(/<TRNAMT>(-?\d+[.,]?\d*)/i) || "";
+    valRaw = valRaw.replace(",", ".");
+
+    let nExtr = get(/<CHECKNUM>([^<]+)/i) || get(/<FITID>([^<]+)/i);
+
+    const d = iso ? new Date(`${iso}T00:00:00`) : null;
+    const mes = d ? String(d.getMonth() + 1).padStart(2, "0") : "";
+    const ano = d ? d.getFullYear() : "";
+
+    return res.json({
+      data_pagamento: { iso },
+      numero_extrato: { raw: nExtr || "" },
+      valor_pago: { raw: valRaw || "", valor_pago_num: valRaw ? Number(valRaw) : null },
+      mes_ano_pagamento: { mes, ano },
+      mes_ao_pagamento: { mes, ano },
+    });
+  } catch (e) {
+    console.error("[/extrair-ofx]", e);
+    res.status(500).json({ ok: false, error: "extract_failed" });
+  }
+});
+
+/* ================= ROTA: /pc/update-row (edição/salvar linha) ================= */
+router.post("/pc/update-row", async (req, res) => {
+  try {
+    const row = req.body || {};
+    const sane = {
+      id: String(row.id || "").trim(),
+      favorecido: String(row.favorecido || "").trim(),
+      cnpj: String(row.cnpj || "").trim(),
+      pcNumero: String(row.pcNumero || "").trim(),
+      dataTitulo: toBRDate(toISO(row.dataTitulo) || row.data_emissao_iso || "") || "",
+      data_emissao_iso: toISO(row.dataTitulo) || row.data_emissao_iso || "",
+      nf: (onlyDigits(row.nf || row.nf_num_9 || "").padStart(9, "0").slice(-9)) || "",
+      nf_num_9: null,
+      nf_num_9_mask: null,
+      nExtrato: String(row.nExtrato || row.numero_extrato || "").trim(),
+      dataPagamento: toBRDate(toISO(row.dataPagamento) || (row.data_pagamento?.iso) || "") || "",
+      valor: Number(row.valor || row.valor_pago_num || 0) || 0,
+      tipoRubrica: String(row.tipoRubrica || row.tipo_rubrica || "").trim(),
+      mesAno: String(row.mesAno || row.mesLabel || "").trim(),
+      just: String(row.just || row.justificativa || "").trim(),
+      docs: row.docs || null,
+    };
+    if (sane.nf) {
+      sane.nf_num_9 = sane.nf;
+      sane.nf_num_9_mask = mask9(sane.nf);
+    }
+    return res.json({ ok: true, data: sane });
+  } catch (e) {
+    console.error("[/pc/update-row] erro:", e);
+    return res.status(500).json({ ok: false, message: "Falha ao atualizar linha" });
   }
 });
 

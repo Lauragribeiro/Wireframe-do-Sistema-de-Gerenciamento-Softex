@@ -1,0 +1,16 @@
+{
+  "instituicao": "EDGE",
+  "projeto": "Projeto Exemplo",
+  "codigo": "Z10-001",
+  "termoParceria": "TP-123",
+  "cnpjInstituicao": "00.000.000/0001-00",
+  "tipoRubrica": "Material de Consumo",
+  "objetoDescricao": "Aquisição de materiais de escritório",
+  "dataPagamento": "2025-02-10",
+  "coordenador": "Fulano de Tal",
+  "propostas": [
+    { "selecao": "SELECIONADA", "ofertante": "ACME LTDA",       "cnpj": "11.111.111/1111-11", "data": "10/02/2025", "valor": "R$ 1.000,00" },
+    {                           "ofertante": "BETA COMERCIAL", "cnpj": "22.222.222/2222-22", "data": "11/02/2025", "valor": "R$ 1.150,00" },
+    {                           "ofertante": "GAMMA PAPÉIS",   "cnpj": "33.333.333/3333-33", "data": "12/02/2025", "valor": "R$ 1.300,00" }
+  ]
+}

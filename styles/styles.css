@@ -911,10 +911,24 @@ td.actions{ display:flex; gap:6px; align-items:center; }
   gap: 12px;
 }
 
-.paste-zone--thumb { min-height: 160px; border: 1px dashed #cfd4ea; padding: 12px; background:#fafbff; border-radius:10px; }
-.paste-zone--thumb .thumb { max-width:100%; max-height:160px; margin-top:8px; border-radius:10px; display:block; }
-.paste-zone--thumb .row { margin-top:8px; display:flex; align-items:center; gap:8px; }
+.paste-zone{border:1px solid #DCE1F7;border-radius:10px;background:#F3F5FF;padding:14px}
+.paste-zone img{max-width:160px;display:block;margin-top:8px;border-radius:8px}
+.grid{display:grid;gap:12px}
+.grid--2{grid-template-columns:1fr 1fr}
+.grid--4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.grid--2,.grid--4{grid-template-columns:1fr}}
+.field label{display:block;font-weight:600;margin:6px 0}
+.hidden-file{display:none}
+.btn{padding:.5rem .9rem;border-radius:8px;border:1px solid #d0d7ff;background:#e8ebff;cursor:pointer}
+.btn--primary{background:#1E2761;color:#fff;border-color:#1E2761}
+.link{background:none;border:none;color:#1E2761;text-decoration:underline;cursor:pointer}
+.upload-row{display:flex;align-items:center;gap:10px}
+.muted{font-size:.9rem;color:#6b6f85}
+.actions{display:flex;gap:8px;margin-top:14px}
 
+/* faz a barra de ações ocupar a largura toda quando estiver dentro de grids */
+.actions { margin-top: 16px; }
+.grid .actions, .grid--2 .actions, .grid--4 .actions { grid-column: 1 / -1; }
 
 /* Botões de abas */
 .topbar .tabs {
@@ -952,3 +966,18 @@ dialog.modal:not([open]) {
 dialog.modal::backdrop {
   background: rgba(0,0,0,.45);
 }
+.hidden { display: none; }
+.tbl-input { width: 100%; padding: 4px 6px; }
+/* garante que dá pra clicar e digitar */
+td { position: relative; }
+.tbl-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid #ddd;
+  background: #fff;
+  pointer-events: auto;
+}
+/* contêiner dos botões de edição */
+.pc-edit-actions { display: inline-flex; gap: 6px; margin-left: 8px; }
+

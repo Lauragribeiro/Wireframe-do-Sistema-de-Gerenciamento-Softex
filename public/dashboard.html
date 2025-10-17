@@ -34,11 +34,76 @@
       <button class="filter-btn" data-filter="finalizado">Finalizado</button>
       <button class="filter-btn" data-filter="pendente">Pendente</button>
     </div>
+<!-- Modal: Editar Projeto -->
+<dialog id="project-edit-modal" class="modal">
+  <form id="project-edit-form" method="dialog" class="modal__content" style="max-width:720px;">
+    <div class="modal__header">
+      <h2>Editar projeto</h2>
+      <button type="button" class="icon-btn" id="project-edit-close" aria-label="Fechar">✕</button>
+    </div>
 
-    <div id="projects-grid" class="projects-grid"></div>
-    <p id="empty-state" class="empty" hidden>Nenhum projeto encontrado.</p>
-  </main>
+    <input type="hidden" name="id" id="pe-id" />
 
+    <div class="form-grid">
+      <label class="field span-2">
+        <span>Título</span>
+        <input type="text" name="titulo" id="pe-titulo" required />
+      </label>
+
+      <label class="field">
+        <span>Código</span>
+        <input type="text" name="codigo" id="pe-codigo" />
+      </label>
+
+      <label class="field">
+        <span>Status</span>
+        <select name="status" id="pe-status">
+          <option value="em_andamento">Em andamento</option>
+          <option value="finalizado">Finalizado</option>
+          <option value="pendente">Pendente</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Vigência (início)</span>
+        <input type="month" name="vigenciaInicio" id="pe-vigini" />
+      </label>
+
+      <label class="field">
+        <span>Vigência (fim)</span>
+        <input type="month" name="vigenciaFim" id="pe-vigfim" />
+      </label>
+
+      <label class="field">
+        <span>Instituição</span>
+        <select name="instituicao" id="pe-inst">
+          <option value="EDGE">EDGE</option>
+          <option value="VERTEX">VERTEX</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Gerente</span>
+        <input type="text" name="gerente" id="pe-gerente" />
+      </label>
+
+      <label class="field">
+        <span>Coordenador</span>
+        <input type="text" name="coordenador" id="pe-coordenador" />
+      </label>
+    </div>
+
+    <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 16px;">
+      <button type="button" class="btn" id="project-delete">Excluir projeto</button>
+      <button type="button" class="btn" id="project-cancel">Cancelar</button>
+      <button type="submit" class="btn btn-primary" id="project-save">Salvar alterações</button>
+    </div>
+  </form>
+</dialog>
+
+     <div id="projects-grid" class="projects-grid"></div>
+       <p id="empty-state" class="empty" hidden>Nenhum projeto encontrado.</p>
+</main>
   <!-- ===== Modal Novo Projeto ===== -->
   <dialog id="project-modal" class="modal">
     <form id="project-form" method="dialog" class="modal__content">
@@ -52,13 +117,14 @@
           <span>Nome do Projeto</span>
           <input name="titulo" type="text" required />
         </label>
+
         <label class="field">
           <span>Instituição</span>
-           <select name="instituicao" required>
-              <option value="EDGE" selected>EDGE</option>
-              <option value="VERTEX">VERTEX</option>
-             </select>
-       </label>
+          <select name="instituicao" required>
+            <option value="EDGE" selected>EDGE</option>
+            <option value="VERTEX">VERTEX</option>
+          </select>
+        </label>
 
         <label class="field">
           <span>Nº do contrato</span>
@@ -89,6 +155,10 @@
           <input name="gerente" type="text" required />
         </label>
       </div>
+      <label class="field">
+          <span>Coordenador do Projeto</span>
+         <input name="coordenador" type="text" />
+        </label>
 
       <div class="modal__footer">
         <button type="button" class="btn" id="btn-cancel">Cancelar</button>
@@ -99,9 +169,27 @@
 
   <!-- **caminho ABSOLUTO** -->
   <script type="module" src="/scripts.js"></script>
-<script type="module">
-  import { getAuth, logout } from "/scripts.js";
-  const me = getAuth();
-  document.querySelector("#userName")?.textContent = me?.name || "";
-  document.querySelector("#logoutBtn")?.addEventListener("click", logout);
-</script>
+
+  <!-- mantém o login existente -->
+  <script type="module">
+    import { getAuth, logout } from "/scripts.js";
+    const me = getAuth();
+    document.querySelector("#userName")?.textContent = me?.name || "";
+    document.querySelector("#logoutBtn")?.addEventListener("click", logout);
+  </script>
+
+  <!-- Novo: persistência do Coordenador (localStorage) -->
+  <script>
+    (function initCoordenador() {
+      const el = document.querySelector("#inp-coordenador");
+      if (!el) return;
+      const saved = localStorage.getItem("coordenadorNome");
+      if (saved) { el.value = saved; window.coordenadorNome = saved; }
+      el.addEventListener("input", () => {
+        window.coordenadorNome = el.value.trim();
+        localStorage.setItem("coordenadorNome", window.coordenadorNome || "");
+      });
+    })();
+  </script>
+</body>
+</html>

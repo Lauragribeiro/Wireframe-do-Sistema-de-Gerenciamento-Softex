@@ -1,4 +1,4 @@
-// src/purchases.js — ESM, compatível com "type": "module"
+// src/purchases.js — versão completa e corrigida (compatível com parseDocs.js)
 import express from "express";
 import fs from "fs";
 import { promises as fsp } from "fs";
@@ -6,7 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
@@ -18,13 +18,16 @@ const router = express.Router();
      POST /api/purchases { ...campos, projectId? } -> insere 1 row (projeto "default" se omitido)
 ================================================= */
 
-const DATA_DIR  = path.join(__dirname, "..", "data");
+const DATA_DIR = path.join(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "purchases.json");
 
 async function ensureStore() {
   await fsp.mkdir(DATA_DIR, { recursive: true });
-  try { await fsp.access(DATA_FILE, fs.constants.F_OK); }
-  catch { await fsp.writeFile(DATA_FILE, JSON.stringify({}, null, 2), "utf8"); }
+  try {
+    await fsp.access(DATA_FILE, fs.constants.F_OK);
+  } catch {
+    await fsp.writeFile(DATA_FILE, JSON.stringify({}, null, 2), "utf8");
+  }
 }
 
 async function loadAll() {
@@ -42,24 +45,36 @@ async function saveAll(map) {
   await fsp.writeFile(DATA_FILE, JSON.stringify(map, null, 2), "utf8");
 }
 
-// saneamento de uma linha (evita tipos inesperados/estouros)
+// --- helper para sanitizar (sem perder docs) ---
+function keepDocs(docs) {
+  if (!docs || typeof docs !== "object")
+    return { nf: null, oficio: null, ordem: null, cotacoes: [], comprovante: null };
+  const out = {
+    nf: docs.nf ?? null,
+    oficio: docs.oficio ?? null,
+    ordem: docs.ordem ?? null,
+    cotacoes: Array.isArray(docs.cotacoes) ? docs.cotacoes.slice(0, 20) : [],
+    comprovante: docs.comprovante ?? null,
+  };
+  return out;
+}
+
+// saneamento de uma linha (mantendo docs como objeto)
 function sanitizeRow(r = {}) {
   return {
     id: String(r.id ?? Date.now()),
     favorecido: String(r.favorecido ?? ""),
     pcNumero: String(r.pcNumero ?? ""),
     cnpj: String(r.cnpj ?? ""),
-    dataTitulo: r.dataTitulo ?? "",
-    nf: String(r.nf ?? r.nf_recibo ?? ""),
+    dataTitulo: r.dataTitulo ?? r.data_emissao_iso ?? "",
+    nf: String(r.nf ?? r.nf_recibo ?? r.nf_num_9 ?? ""),
     nExtrato: String(r.nExtrato ?? r.numero_extrato ?? ""),
-    dataPagamento: r.dataPagamento ?? r.data_pagamento ?? "",
-    valor: (r.valor !== undefined ? r.valor : r.valor_pago) ?? "",
-    rubrica: String(r.rubrica ?? ""),
-    mesLabel: String(r.mesLabel ?? (r.mes && r.ano ? `${String(r.mes).padStart(2,"0")}/${r.ano}` : "")),
-    just: String(r.just ?? ""),
-    docs: Array.isArray(r.docs)
-      ? r.docs.map(d => (d && d.name) ? String(d.name) : String(d || "")).slice(0, 50)
-      : []
+    dataPagamento: r.dataPagamento ?? r.data_pagamento?.iso ?? "",
+    valor: r.valor ?? r.valor_pago_num ?? "",
+    rubrica: String(r.rubrica ?? r.tipoRubrica ?? r.tipo_rubrica ?? ""),
+    mesLabel: String(r.mesLabel ?? r.mesAno ?? (r.mes && r.ano ? `${r.mes}/${r.ano}` : "")),
+    just: String(r.just ?? r.justificativa ?? "").trim(),
+    docs: keepDocs(r.docs),
   };
 }
 
@@ -73,7 +88,9 @@ router.get("/purchases", async (req, res) => {
     const rows = all[projectId] || [];
     res.json({ ok: true, data: rows });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "load_failed", detail: String(e?.message || e) });
+    res
+      .status(500)
+      .json({ ok: false, error: "load_failed", detail: String(e?.message || e) });
   }
 });
 
@@ -91,7 +108,10 @@ router.put("/purchases", async (req, res) => {
     await saveAll(all);
     res.json({ ok: true, data: rows });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "save_failed", detail: String(e?.message || e) });
+    console.error("PUT /purchases erro:", e);
+    res
+      .status(500)
+      .json({ ok: false, error: "save_failed", detail: String(e?.message || e) });
   }
 });
 
@@ -106,8 +126,12 @@ router.post("/purchases", async (req, res) => {
     await saveAll(all);
     res.json({ ok: true, data: row });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "insert_failed", detail: String(e?.message || e) });
+    console.error("POST /purchases erro:", e);
+    res
+      .status(500)
+      .json({ ok: false, error: "insert_failed", detail: String(e?.message || e) });
   }
 });
 
 export default router;
+
