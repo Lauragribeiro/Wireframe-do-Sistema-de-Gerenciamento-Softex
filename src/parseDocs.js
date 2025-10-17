@@ -40,7 +40,7 @@ const upload = multer({
 });
 
 /* ================= OpenAI (opcional) ================= */
-const openai = process.env.OPENAI_API_KEY
+let openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
@@ -468,6 +468,7 @@ async function analyzeCotacoesWithLLM(namedTexts = []) {
       avisos,
     };
   } catch (err) {
+    markOpenAIDisabledIfAuthError(err);
     console.warn("[LLM-cotacoes] falhou:", err?.message || err);
     return null;
   }
@@ -475,6 +476,14 @@ async function analyzeCotacoesWithLLM(namedTexts = []) {
 
 /* ================= LLM helpers ================= */
 // Tenta extrair JSON mesmo que venha cercado por ```json ... ```
+function markOpenAIDisabledIfAuthError(err) {
+  const code = err?.status || err?.statusCode || err?.code || err?.error?.code;
+  const msg  = String(err?.message || "").toLowerCase();
+  if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
+    openai = null;
+  }
+}
+
 function extractJsonSafe(str) {
   if (!str) return null;
   let s = String(str).trim();
@@ -509,6 +518,7 @@ async function callLLMJson(messages) {
     const txt = r?.choices?.[0]?.message?.content ?? "";
     return extractJsonSafe(txt);
   } catch (e) {
+    markOpenAIDisabledIfAuthError(e);
     console.warn("[LLM] falhou:", e?.message);
     return null;
   }
@@ -593,142 +603,139 @@ router.post("/parse-docs", async (req, res, next) => {
   { name: "ordem", maxCount: 1 },
   { name: "cotacoes", maxCount: 10 },
 ]),
- async (req, res) => 
-  async (req, res) => {
-    try {
-      const nfFile     = (req.files?.nf || [])[0];
-      const oficioFile = (req.files?.oficio || [])[0];
-      const ordemFile  = (req.files?.ordem || [])[0];
-      const cots       = (req.files?.cotacoes || []);
+async (req, res) => {
+  try {
+    const nfFile     = (req.files?.nf || [])[0];
+    const oficioFile = (req.files?.oficio || [])[0];
+    const ordemFile  = (req.files?.ordem || [])[0];
+    const cots       = (req.files?.cotacoes || []);
 
-      // 1) Campos fortes diretamente da NF
-      let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
-      if (nfFile) {
-        const name = (nfFile.originalname || "").toLowerCase();
-        if (name.endsWith(".xml")) {
-          const xml = nfFile.buffer.toString("utf-8");
-          nfFields = extractFromXml(xml);
-        } else {
-          const maybeText = await fileToText(nfFile); // PDF/Imagem → texto
-          const { nf_num_9, nf_num_9_mask } = extractNF9FromText(maybeText);
-          const data_emissao_iso = extractIssueFromTextNF(maybeText);
-          nfFields = { nf_num_9, nf_num_9_mask, data_emissao_iso };
-        }
-      }
-
-      // 2) Textos para heurísticas + LLM
-      const nfText     = await fileToText(nfFile);
-      const oficioText = await fileToText(oficioFile);
-      const ordemText  = await fileToText(ordemFile);
-      const cotEntries = await Promise.all(
-        cots.map(async (file, idx) => ({
-          name: file?.originalname || `cotacao_${idx + 1}`,
-          text: await fileToText(file),
-        }))
-      );
-      const cotText    = cotEntries.map((c) => c.text || "").join("\n---\n");
-
-      // heurísticas
-      const localNF   = extractNF_local(nfText);
-      const localJust = extractJust_local(`${oficioText}\n${ordemText}`);
-
-      // 3) LLM (opcional)
-      const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
-      const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
-
-      let cotacoesAI = null;
-      try {
-        cotacoesAI = await analyzeCotacoesWithLLM(cotEntries);
-      } catch (err) {
-        console.warn("[parse-docs] analyzeCotacoesWithLLM falhou:", err?.message || err);
-      }
-
-      // 4) Merge — NF
-      let nfFinal = null;
-      if (nfFields.nf_num_9) {
-        nfFinal = nfFields.nf_num_9;
+    // 1) Campos fortes diretamente da NF
+    let nfFields = { nf_num_9: null, nf_num_9_mask: null, data_emissao_iso: null };
+    if (nfFile) {
+      const name = (nfFile.originalname || "").toLowerCase();
+      if (name.endsWith(".xml")) {
+        const xml = nfFile.buffer.toString("utf-8");
+        nfFields = extractFromXml(xml);
       } else {
-        const fromText = extractNF9FromText(nfText || "");
-        nfFinal = fromText.nf_num_9 || onlyDigits(localNF) || onlyDigits(llm?.nf || "");
-        if (nfFinal) nfFinal = String(nfFinal).padStart(9, "0").slice(-9);
+        const maybeText = await fileToText(nfFile); // PDF/Imagem → texto
+        const { nf_num_9, nf_num_9_mask } = extractNF9FromText(maybeText);
+        const data_emissao_iso = extractIssueFromTextNF(maybeText);
+        nfFields = { nf_num_9, nf_num_9_mask, data_emissao_iso };
       }
-      const nfMask = nfFinal ? mask9(nfFinal) : null;
-
-      // 4) Merge — Data do título
-  
-      let dataTituloISO =
-        nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
-        extractIssueFromTextNF(nfText || "");        // PDF/Imagem: Emissão → Saída
-
-      if (!dataTituloISO && llm?.dataTitulo) {
-        const fromLLM = toISO(llm.dataTitulo);
-        if (fromLLM) dataTituloISO = fromLLM;
-      }
-
-      const dataTituloBR = toBRDate(dataTituloISO || "");
-
-      // 4) Merge — Justificativa
-      let justFinal = (localJust || "").trim();
-      if (!justFinal && llm?.just) justFinal = String(llm.just).trim();
-
-      const merged = {
-        nf: nfFinal || "",
-        nf_num_9: nfFinal || null,
-        nf_num_9_mask: nfMask,
-        nf_mask: nfMask || "",
-        data_emissao_iso: dataTituloISO || "",
-        dataTitulo: dataTituloBR || "",
-        just: justFinal || "",
-        // campos do comprovante vêm de outras rotas
-        cnpj: (llm?.cnpj || "").trim(),
-        pcNumero: (llm?.pcNumero || "").trim(),
-      };
-
-      if (cotacoesAI) {
-        merged.cotacoes_objeto = cotacoesAI.objeto || "Não informado";
-        merged.cotacoes_propostas = cotacoesAI.propostas || [];
-        if (cotacoesAI.avisos?.length) merged.cotacoes_avisos = cotacoesAI.avisos;
-        if (!merged.objeto && cotacoesAI.objeto) merged.objeto = cotacoesAI.objeto;
-        if (!merged.propostas?.length && cotacoesAI.propostas?.length) merged.propostas = cotacoesAI.propostas;
-      }
-
-      // Fallback cruzado usando outros documentos se ainda faltou algo
-      if (!merged.nf || !merged.data_emissao_iso) {
-        const texts = [oficioText, ordemText, cotText].filter(Boolean).join("\n");
-        if (!merged.nf) {
-          const got = extractNF9FromText(texts);
-          if (got?.nf_num_9) {
-            merged.nf = got.nf_num_9;
-            merged.nf_num_9 = got.nf_num_9;
-            merged.nf_num_9_mask = got.nf_num_9_mask;
-          }
-        }
-        if (!merged.data_emissao_iso) {
-          const d = extractIssueFromTextNF(texts);
-          if (d) {
-            merged.data_emissao_iso = d;
-            merged.dataTitulo = toBRDate(d);
-          }
-        }
-      }
-
-      // Se veio só "nf", derive máscara
-      if (!merged.nf_num_9 && merged.nf) {
-        const raw = onlyDigits(merged.nf);
-        if (raw.length >= 3 && raw.length <= 12) {
-          const nine = raw.padStart(9, "0").slice(-9);
-          merged.nf_num_9 = nine;
-          merged.nf_num_9_mask = mask9(nine);
-        }
-      }
-
-      return res.json({ ok: true, data: merged });
-    } catch (err) {
-      console.error("parse-docs error", err);
-      return res.status(500).json({ ok: false, message: "Erro ao processar documentos" });
     }
+
+    // 2) Textos para heurísticas + LLM
+    const nfText     = await fileToText(nfFile);
+    const oficioText = await fileToText(oficioFile);
+    const ordemText  = await fileToText(ordemFile);
+    const cotEntries = await Promise.all(
+      cots.map(async (file, idx) => ({
+        name: file?.originalname || `cotacao_${idx + 1}`,
+        text: await fileToText(file),
+      }))
+    );
+    const cotText    = cotEntries.map((c) => c.text || "").join("\n---\n");
+
+    // heurísticas
+    const localNF   = extractNF_local(nfText);
+    const localJust = extractJust_local(`${oficioText}\n${ordemText}`);
+
+    // 3) LLM (opcional)
+    const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
+    const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
+
+    let cotacoesAI = null;
+    try {
+      cotacoesAI = await analyzeCotacoesWithLLM(cotEntries);
+    } catch (err) {
+      console.warn("[parse-docs] analyzeCotacoesWithLLM falhou:", err?.message || err);
+    }
+
+    // 4) Merge — NF
+    let nfFinal = null;
+    if (nfFields.nf_num_9) {
+      nfFinal = nfFields.nf_num_9;
+    } else {
+      const fromText = extractNF9FromText(nfText || "");
+      nfFinal = fromText.nf_num_9 || onlyDigits(localNF) || onlyDigits(llm?.nf || "");
+      if (nfFinal) nfFinal = String(nfFinal).padStart(9, "0").slice(-9);
+    }
+    const nfMask = nfFinal ? mask9(nfFinal) : null;
+
+    // 4) Merge — Data do título
+    let dataTituloISO =
+      nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
+      extractIssueFromTextNF(nfText || "");        // PDF/Imagem: Emissão → Saída
+
+    if (!dataTituloISO && llm?.dataTitulo) {
+      const fromLLM = toISO(llm.dataTitulo);
+      if (fromLLM) dataTituloISO = fromLLM;
+    }
+
+    const dataTituloBR = toBRDate(dataTituloISO || "");
+
+    // 4) Merge — Justificativa
+    let justFinal = (localJust || "").trim();
+    if (!justFinal && llm?.just) justFinal = String(llm.just).trim();
+
+    const merged = {
+      nf: nfFinal || "",
+      nf_num_9: nfFinal || null,
+      nf_num_9_mask: nfMask,
+      nf_mask: nfMask || "",
+      data_emissao_iso: dataTituloISO || "",
+      dataTitulo: dataTituloBR || "",
+      just: justFinal || "",
+      // campos do comprovante vêm de outras rotas
+      cnpj: (llm?.cnpj || "").trim(),
+      pcNumero: (llm?.pcNumero || "").trim(),
+    };
+
+    if (cotacoesAI) {
+      merged.cotacoes_objeto = cotacoesAI.objeto || "Não informado";
+      merged.cotacoes_propostas = cotacoesAI.propostas || [];
+      if (cotacoesAI.avisos?.length) merged.cotacoes_avisos = cotacoesAI.avisos;
+      if (!merged.objeto && cotacoesAI.objeto) merged.objeto = cotacoesAI.objeto;
+      if (!merged.propostas?.length && cotacoesAI.propostas?.length) merged.propostas = cotacoesAI.propostas;
+    }
+
+    // Fallback cruzado usando outros documentos se ainda faltou algo
+    if (!merged.nf || !merged.data_emissao_iso) {
+      const texts = [oficioText, ordemText, cotText].filter(Boolean).join("\n");
+      if (!merged.nf) {
+        const got = extractNF9FromText(texts);
+        if (got?.nf_num_9) {
+          merged.nf = got.nf_num_9;
+          merged.nf_num_9 = got.nf_num_9;
+          merged.nf_num_9_mask = got.nf_num_9_mask;
+        }
+      }
+      if (!merged.data_emissao_iso) {
+        const d = extractIssueFromTextNF(texts);
+        if (d) {
+          merged.data_emissao_iso = d;
+          merged.dataTitulo = toBRDate(d);
+        }
+      }
+    }
+
+    // Se veio só "nf", derive máscara
+    if (!merged.nf_num_9 && merged.nf) {
+      const raw = onlyDigits(merged.nf);
+      if (raw.length >= 3 && raw.length <= 12) {
+        const nine = raw.padStart(9, "0").slice(-9);
+        merged.nf_num_9 = nine;
+        merged.nf_num_9_mask = mask9(nine);
+      }
+    }
+
+    return res.json({ ok: true, data: merged });
+  } catch (err) {
+    console.error("parse-docs error", err);
+    return res.status(500).json({ ok: false, message: "Erro ao processar documentos" });
   }
-);
+});
 
 /* ================= ROTA: /extrair-documento-imagem (comprovante colado) ================= */
 router.post("/extrair-documento-imagem", async (req, res) => {
