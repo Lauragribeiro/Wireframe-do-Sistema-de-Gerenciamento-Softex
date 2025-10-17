@@ -267,6 +267,74 @@ function normalizeMoney(value) {
   return Number.isFinite(num) ? num : "";
 }
 
+function maskDocBR(doc = "") {
+  const digits = onlyDigits(doc);
+  if (digits.length === 14) return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, "$1.$2.$3/$4-$5");
+  if (digits.length === 11) return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2}).*$/, "$1.$2.$3-$4");
+  return toStringSafe(doc);
+}
+
+function safeParseJSON(value) {
+  if (typeof value !== "string") return null;
+  try { return JSON.parse(value); }
+  catch { return null; }
+}
+
+function parsePropostasList(body = {}) {
+  const sources = [];
+  if (Array.isArray(body.propostas)) sources.push(body.propostas);
+  const propJson = safeParseJSON(body.propostas_json || body.propostasJSON);
+  if (Array.isArray(propJson)) sources.push(propJson);
+  if (Array.isArray(body.cotacoes_propostas)) sources.push(body.cotacoes_propostas);
+  const cotJson = safeParseJSON(body.cotacoes_propostas_json || body.cotacoesJson);
+  if (Array.isArray(cotJson)) sources.push(cotJson);
+  if (Array.isArray(body.mapaPropostas)) sources.push(body.mapaPropostas);
+
+  const rawList = sources.find((arr) => Array.isArray(arr) && arr.length) || [];
+  const normalized = [];
+
+  rawList.forEach((item, idx) => {
+    if (!item || typeof item !== "object") return;
+
+    const selecaoRaw = toStringSafe(item.selecao ?? (item.selecionada ? "SELECIONADA" : ""));
+    const ofertante = toStringSafe(item.ofertante ?? item.fornecedor ?? item.nome);
+    const doc = maskDocBR(item.cnpj ?? item.cnpj_ofertante ?? item.cnpjCpf ?? item.cnpj_cpf ?? item.cpf);
+    const dataISO = normalizeDate(
+      item.dataCotacao ?? item.data_cotacao ?? item.data ?? item.dataCotacaoISO ?? item.data_cotacao_iso
+    );
+    const valorNum = normalizeMoney(
+      item.valor_num ?? item.valor ?? item.preco ?? item.total ?? item.valor_proposta
+    );
+
+    const proposal = {
+      selecao: selecaoRaw || (item.selecionada ? "SELECIONADA" : `Cotação ${idx + 1}`),
+      ofertante,
+      cnpj: doc,
+      cnpj_ofertante: doc,
+      data_cotacao: dataISO || toStringSafe(item.data_cotacao ?? item.dataCotacao ?? item.data),
+    };
+
+    if (dataISO) proposal.data_cotacao_iso = dataISO;
+
+    if (typeof valorNum === "number" && Number.isFinite(valorNum)) {
+      proposal.valor = valorNum;
+      proposal.valor_num = valorNum;
+    } else {
+      const rawValor = toStringSafe(item.valor ?? item.preco ?? item.total ?? item.valor_proposta);
+      proposal.valor = rawValor;
+      if (typeof item.valor_num === "number" && Number.isFinite(item.valor_num)) {
+        proposal.valor_num = item.valor_num;
+      } else {
+        proposal.valor_num = null;
+      }
+    }
+
+    normalized.push(proposal);
+  });
+
+  return normalized;
+}
+
 function normalizeDocs(body = {}) {
   const src = body.docs || body.documentacao || body.documentos || {};
   const ordemVal = src.ordem ?? src.ordem_fornecimento ?? src.ordemFornecimento ?? null;
@@ -351,6 +419,21 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
 
   const docs = normalizeDocs(body);
 
+  const objetoBase = toStringSafe(
+    body.objeto ??
+    body.objetoDescricao ??
+    body.cotacaoObjeto ??
+    body.objeto_cotacao ??
+    body.objetoMapa ??
+    body.objetoDescricaoMapa ??
+    ""
+  );
+  const propostasList = parsePropostasList(body);
+  const cotAvisosSrc = body.cotacoesAvisos ?? body.cotacoes_avisos;
+  const cotacoesAvisos = Array.isArray(cotAvisosSrc)
+    ? cotAvisosSrc.map((v) => toStringSafe(v)).filter(Boolean)
+    : [];
+
   const out = {
     favorecido: toStringSafe(body.favorecido ?? body.favorecidoNome ?? body.nomeFavorecido),
     cnpj: toStringSafe(body.cnpj ?? body.cnpjFav ?? body.favorecidoDoc),
@@ -365,6 +448,12 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
     mesAno,
     just,
     docs,
+    objeto: objetoBase,
+    cotacaoObjeto: objetoBase,
+    cotacoes_objeto: objetoBase,
+    objetoDescricao: objetoBase,
+    propostas: propostasList,
+    cotacoes_propostas: propostasList,
   };
 
   if (assignId || idRaw != null) {
@@ -381,6 +470,7 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
   out.nf_num_mask = out.nf_num_mask ?? nf;
   out.nf_num_9 = out.nf_num_9 ?? nf;
   out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
+  if (!out.nf_mask && out.nf_num_9_mask) out.nf_mask = out.nf_num_9_mask;
   out.justificativa = just;
   out.numero_extrato = nExtrato;
   out.data_pagamento = dataPagamento;
@@ -400,6 +490,11 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
   out.mesLabel = mesLabel;
   out.mesAno = mesAno;
   out.mes_ano = mesAno;
+
+  if (cotacoesAvisos.length) {
+    out.cotacoesAvisos = cotacoesAvisos;
+    out.cotacoes_avisos = cotacoesAvisos;
+  }
 
   return out;
 }
@@ -792,6 +887,53 @@ async function ensureCotacoesText(cotacoes = []) {
     out.push({ name, text: text || "" });
   }
   return out;
+}
+
+async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotacoes = [] } = {}) {
+  if (!hasOpenAI || !OpenAI) return { objeto: "", propostas: [] };
+  try {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const blocks = (cotacoes || [])
+      .map((c, idx) => {
+        const name = c?.name || c?.filename || c?.fileName || `Cotacao_${idx + 1}`;
+        const text = String(c?.text || "").slice(0, 20000);
+        return `### COTAÇÃO ${idx + 1} (${name})\n${text}`;
+      })
+      .filter(Boolean);
+
+    if (!blocks.length) return { objeto: "", propostas: [] };
+
+    const prompt = `Instituição: ${instituicao || ""}\nRubrica: ${rubrica || ""}\n\nAnalise as cotações a seguir e retorne um JSON com os campos {\n  "objeto": string,\n  "propostas": [ {\"selecao\", \"ofertante\", \"cnpj\", \"dataCotacao\", \"valor\"} ]\n}.\n\n${blocks.join("\n\n")}`;
+
+    const resp = await client.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: "Você extrai dados estruturados de cotações comerciais e responde em JSON válido." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+    });
+
+    const raw = resp.output_text || "{}";
+    let data;
+    try { data = JSON.parse(raw); } catch { data = {}; }
+
+    const objeto = typeof data.objeto === "string" ? data.objeto.trim() : "";
+    const propostas = Array.isArray(data.propostas)
+      ? data.propostas.map((p, idx) => ({
+          selecao: p.selecao || `Cotação ${idx + 1}`,
+          ofertante: p.ofertante || "",
+          cnpj_ofertante: p.cnpj_ofertante || p.cnpj || "",
+          data_cotacao: fmtBRDate(p.dataCotacao || p.data_cotacao || p.data || ""),
+          valor: fmtBRL(p.valor || p.valorBR || ""),
+        }))
+      : [];
+
+    return { objeto, propostas };
+  } catch (err) {
+    console.warn("[mapa] extractFromCotacoesWithAI falhou:", err?.message || err);
+    return { objeto: "", propostas: [] };
+  }
 }
 function guessFieldsFromText(txt = "") {
   const text = String(txt || "");

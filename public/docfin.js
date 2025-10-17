@@ -19,6 +19,97 @@ document.addEventListener('DOMContentLoaded', function () {
   var maskCNPJ   = function (d) { return String(d || '').replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, '$1.$2.$3/$4-$5'); };
 
   var abbr = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  let rubricaSelectEl = null;
+  const monthIndex = {
+    jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5,
+    jul: 6, ago: 7, set: 8, out: 9, nov:10, dez:11
+  };
+
+  function isoToMesAno(iso) {
+    if (!iso) return '';
+    if (/^\d{2}\/\d{4}$/.test(iso)) return iso;
+    const mIso = String(iso).match(/^(\d{4})-(\d{2})/);
+    if (mIso) return `${mIso[2]}/${mIso[1]}`;
+    const m = String(iso).match(/(\d{2})[\/.-](\d{4})/);
+    return m ? `${m[1]}/${m[2]}` : '';
+  }
+
+  function labelToMesAno(label) {
+    if (!label) return '';
+    if (/^\d{2}\/\d{4}$/.test(label)) return label;
+    const parts = String(label).split(/[\/\-]/);
+    if (parts.length !== 2) return '';
+    const key = parts[0].trim().slice(0,3).toLowerCase();
+    const idx = monthIndex[key];
+    if (idx == null) return '';
+    const ano = parts[1].trim();
+    return `${String(idx + 1).padStart(2,'0')}/${ano}`;
+  }
+
+  function mesAnoToLabel(mesAno) {
+    if (!mesAno) return '';
+    const m = String(mesAno).match(/^(\d{1,2})\/(\d{4})$/);
+    if (!m) return mesAno;
+    const idx = Number(m[1]) - 1;
+    return idx >= 0 && idx < abbr.length ? `${abbr[idx]}/${m[2]}` : mesAno;
+  }
+
+  function cssEscape(val) {
+    try {
+      return typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(String(val))
+        : String(val);
+    } catch {
+      return String(val);
+    }
+  }
+
+  function getRubricaSelection(select) {
+    if (!select) return { value: '', label: '' };
+    const opt = select.selectedOptions && select.selectedOptions[0];
+    const value = opt ? String(opt.value ?? opt.textContent ?? '').trim() : String(select.value || '').trim();
+    const label = opt ? String(opt.textContent || '').trim() : (value || '');
+    return { value, label: label || value };
+  }
+
+  function resolveRubricaLabel(row) {
+    if (!row) return '';
+    const raw = String(row.tipoRubrica || row.rubrica || '').trim();
+    if (raw) return raw;
+    if (row.rubricaValue && rubricaSelectEl) {
+      const match = Array.from(rubricaSelectEl.options).find((opt) => String(opt.value) === String(row.rubricaValue));
+      if (match) return String(match.textContent || '').trim();
+    }
+    return '';
+  }
+
+  function resolveMesLabel(row) {
+    if (!row) return '';
+    if (row.mesLabel) return row.mesLabel;
+    if (row.mesAno) {
+      const label = mesAnoToLabel(row.mesAno);
+      if (label) return label;
+    }
+    if (row.dataPagamento) {
+      const mesAno = isoToMesAno(row.dataPagamento);
+      if (mesAno) return mesAnoToLabel(mesAno);
+    }
+    return '';
+  }
+
+  function resolveMesAno(row) {
+    if (!row) return '';
+    if (row.mesAno) return row.mesAno;
+    if (row.mesLabel) {
+      const m = labelToMesAno(row.mesLabel);
+      if (m) return m;
+    }
+    if (row.dataPagamento) {
+      const m = isoToMesAno(row.dataPagamento);
+      if (m) return m;
+    }
+    return '';
+  }
 
   var formatDateBR = function (input) {
     if (!input) return '';
@@ -66,19 +157,25 @@ document.addEventListener('DOMContentLoaded', function () {
     return (Y-y0)*12 + (M-m0) + 1;
   };
 
-  const deepMerge = (dst, src) => {
-    if (!src) return dst;
-    for (const k of Object.keys(src)) {
-      const v = src[k];
-      if (v && typeof v === "object" && !Array.isArray(v)) {
+  const deepMerge = (dst, src) => {
+    if (!src) return dst;
+    for (const k of Object.keys(src)) {
+      const v = src[k];
+      if (v && typeof v === "object" && !Array.isArray(v)) {
         if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
         deepMerge(dst[k], v);
       } else {
         if (v !== undefined && v !== null && v !== "") dst[k] = v;
       }
-    }
-    return dst;
-  };
+    }
+    return dst;
+  };
+  const clonePropostas = (list) => Array.isArray(list) ? list.map((item) => ({ ...item })) : [];
+  const cloneAvisos = (list) => Array.isArray(list) ? list.map((item) => String(item)) : [];
+  const normalizeObjeto = (val) => {
+    if (val == null) return "";
+    return String(val).trim();
+  };
 /* ================== Seletores / Estado ================== */
 const form    = $("#form-evid");
 const tblBody = $("#tbl-pc tbody");
@@ -87,6 +184,14 @@ if (!form || !tblBody || !btnSave) {
   console.error("[docfin] Elementos essenciais não encontrados.");
   return;
 }
+
+ function markTableDirty() {
+   if (!btnSave) return;
+   btnSave.disabled = false;
+   const txt = btnSave.dataset.defaultLabel || btnSave.textContent || "Salvar tabela";
+   if (!btnSave.dataset.defaultLabel) btnSave.dataset.defaultLabel = txt;
+   btnSave.textContent = txt;
+ }
 
 /* === SOMENTE "Adicionar à tabela" deve submeter === */
 const btnAddRow = $("#btn-add-row");
@@ -127,6 +232,7 @@ $$('[data-pick]').forEach((btn) => {
 
   // Campos do formulário
   const selRubrica = $("#rubrica");
+  rubricaSelectEl = selRubrica;
   const inCNPJ     = $("#cnpj-fav");
   const inRazao    = $("#fav-razao");
 
@@ -153,6 +259,24 @@ $$('[data-pick]').forEach((btn) => {
   // Modal
   const pcModal = $("#pc-modal");
   const pcClose = $("#pc-close");
+  const modalRubrica = $("#md-rubrica");
+  const modalDocsArea = $("#md-docs");
+  const btnModalEdit = $("#pc-edit-details");
+  const btnModalSave = $("#pc-save-details");
+  const modalFeedback = $("#pc-edit-feedback");
+
+  if (modalRubrica && rubricaSelectEl) {
+    const placeholder = modalRubrica.querySelector('option[value=""]');
+    modalRubrica.innerHTML = '';
+    const baseOption = document.createElement('option');
+    baseOption.value = '';
+    baseOption.textContent = placeholder?.textContent || 'Selecione';
+    modalRubrica.appendChild(baseOption);
+    Array.from(rubricaSelectEl.options).forEach(opt => {
+      modalRubrica.appendChild(opt.cloneNode(true));
+    });
+    modalRubrica.value = '';
+  }
 
   // Array de linhas
   const rows = window.rows || [];
@@ -262,6 +386,13 @@ $$('[data-pick]').forEach((btn) => {
       if (inJust && lastParsedDocs.just) inJust.value = String(lastParsedDocs.just || "");
       // depois de deepMerge(...)
 
+      if (Array.isArray(lastParsedDocs.cotacoes_propostas) && lastParsedDocs.cotacoes_propostas.length) {
+        console.log("[docfin] Propostas extraídas via IA:", lastParsedDocs.cotacoes_propostas);
+      }
+      if (lastParsedDocs.cotacoes_objeto) {
+        console.log("[docfin] Objeto sugerido:", lastParsedDocs.cotacoes_objeto);
+      }
+
     } else {
       console.warn("[docfin] parse-docs não OK:", j);
     }
@@ -285,110 +416,115 @@ function hashAutoRow() {
   } catch { return String(Date.now()); }
 }
 async function maybeAutoInsertRow(reason = "") {
-  // 1) checa se já temos NF **e** Comprovante
-  // use só a data ISO mandada pelo backend; o render já chama formatDateBR
-const dataTituloISO = lastParsedDocs?.data_emissao_iso || "";
+  const dataTituloISO = lastParsedDocs?.data_emissao_iso || "";
+  const nfCurta =
+    lastParsedDocs?.nf_num ||
+    lastParsedDocs?.nf_num_mask ||
+    lastParsedDocs?.nf_num_9_mask ||
+    lastParsedDocs?.nf_num_9 ||
+    lastParsedDocs?.nf ||
+    "";
 
-// mostre o número curto (mascarado se existir). NÃO caia no .nf (que pode vir “qualquer coisa”)
-const nfCurta =
-  lastParsedDocs?.nf_num ||               // preferido
-  lastParsedDocs?.nf_num_mask ||          // número com máscara
-  lastParsedDocs?.nf_num_9_mask ||        // fallback 9 dígitos (mascarado)
-  lastParsedDocs?.nf_num_9 ||             // fallback 9 dígitos
-  lastParsedDocs?.nf ||                   // último recurso
-  "";
-const haveNF  = !!(dataTituloISO || nfCurta);
-const havePay = !!(lastParsedPay && (lastParsedPay.data_pagamento_iso || lastParsedPay.valor_num != null || lastParsedPay.numero_extrato_raw));
-if (!haveNF || !havePay) return;
+  const haveNF = !!(dataTituloISO || nfCurta);
+  const havePay = !!(
+    lastParsedPay &&
+    (lastParsedPay.data_pagamento_iso || lastParsedPay.valor_num != null || lastParsedPay.numero_extrato_raw)
+  );
+  if (!haveNF || !havePay) return;
 
-  // 2) evita inserir duplicado se os mesmos dados já foram inseridos
   const h = hashAutoRow();
   if (autoInsertedHash && autoInsertedHash === h) return;
 
-  // 3) monta a linha usando os mesmos critérios do submit()
-  const onlyDigits = (s) => (String(s||"").match(/\d+/g) || []).join("");
-  const maskCNPJ   = (d) => String(d||"").replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, "$1.$2.$3/$4-$5");
-  const monthLabelPlusOne = (isoDate) => {
-    if (!isoDate) return "";
-    const abbr = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
-    const d = new Date(`${isoDate}T00:00:00`);
-    d.setMonth(d.getMonth()+1);
-    return `${abbr[d.getMonth()]}/${d.getFullYear()}`;
-  };
+  const onlyDigits = (s) => (String(s || "").match(/\d+/g) || []).join("");
+  const maskCNPJ = (d) => String(d || "").replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, "$1.$2.$3/$4-$5");
+
   const pcLabelForPayment = (isoPay) => {
     if (!window.currentProject?.vigenciaInicio || !window.currentProject?.vigenciaFim || !isoPay) return "1ª PC";
     const monthsSinceStart = (iso, start) => {
-      const [Y,M]  = iso.split("-").map(Number);
-      const [y0,m0]= start.split("-").map(Number);
-      return (Y-y0)*12 + (M-m0) + 1;
+      const [Y, M] = iso.split("-").map(Number);
+      const [y0, m0] = start.split("-").map(Number);
+      return (Y - y0) * 12 + (M - m0) + 1;
     };
-    const ini = String(window.currentProject.vigenciaInicio||"").slice(0,7)+"-01";
-    const fim = String(window.currentProject.vigenciaFim||"").slice(0,7)+"-01";
-    const dur   = monthsSinceStart(fim, ini);
-    const total = Math.max(1, Math.ceil(dur/3));
-    const k     = monthsSinceStart((lastParsedPay?.data_pagamento_iso||isoPay), ini);
-    const idx   = Math.min(Math.max(Math.ceil(k/3),1), total);
-    return (idx === total) ? "PC Final" : `${idx}ª PC`;
+    const ini = String(window.currentProject.vigenciaInicio || "").slice(0, 7) + "-01";
+    const fim = String(window.currentProject.vigenciaFim || "").slice(0, 7) + "-01";
+    const dur = monthsSinceStart(fim, ini);
+    const total = Math.max(1, Math.ceil(dur / 3));
+    const k = monthsSinceStart((lastParsedPay?.data_pagamento_iso || isoPay), ini);
+    const idx = Math.min(Math.max(Math.ceil(k / 3), 1), total);
+    return idx === total ? "PC Final" : `${idx}ª PC`;
   };
 
-  // favorecido e CNPJ (usa inputs, senão deixa vazio — o usuário pode preencher)
-  const inCNPJ   = document.querySelector("#cnpj-fav");
-  const inRazao  = document.querySelector("#fav-razao");
+  const inCNPJ = document.querySelector("#cnpj-fav");
+  const inRazao = document.querySelector("#fav-razao");
   const selRubrica = document.querySelector("#rubrica");
 
   const cnpjDigits = onlyDigits(inCNPJ?.value || "");
-  let favorecido   = (inRazao?.value || "").trim();
-
-  if (!favorecido && cnpjDigits.length === 14) {
-    // se quiser, pode chamar /api/cnpj aqui como no submit; para não atrasar, mantém como está
-  }
+  let favorecido = (inRazao?.value || "").trim();
 
   const dataPagISO = (lastParsedPay?.data_pagamento_iso || "").trim();
-  const nExtrato   = (lastParsedPay?.numero_extrato_raw || "").trim();
-  const valorNum   = (typeof lastParsedPay?.valor_num === "number") ? lastParsedPay.valor_num : null;
+  const nExtrato = (lastParsedPay?.numero_extrato_raw || "").trim();
+  const valorNum = typeof lastParsedPay?.valor_num === "number" ? lastParsedPay.valor_num : null;
 
-  const mesLabel   = dataPagISO ? monthLabelPlusOne(dataPagISO) : "";
+  const mesAnoValue = dataPagISO ? isoToMesAno(dataPagISO) : "";
+  const mesLabel = mesAnoValue ? mesAnoToLabel(mesAnoValue) : monthLabelPlusOne(dataPagISO);
+  const rubSel = getRubricaSelection(selRubrica);
+
+  const nfNine = lastParsedDocs?.nf_num_9 || leftPad9(
+    lastParsedDocs?.nf ||
+    lastParsedDocs?.nf_num_9_mask ||
+    lastParsedDocs?.nf_num ||
+    lastParsedDocs?.nf_num_mask ||
+    nfCurta
+  );
+  const nfMask = lastParsedDocs?.nf_num_9_mask || (nfNine ? mask9(nfNine) : "");
+  const objetoAI = normalizeObjeto(lastParsedDocs?.cotacoes_objeto || lastParsedDocs?.objeto || "");
+  const propostasAI = clonePropostas(lastParsedDocs?.cotacoes_propostas || lastParsedDocs?.propostas || []);
+  const avisosAI = cloneAvisos(lastParsedDocs?.cotacoes_avisos || []);
 
   const row = {
     id: Math.random().toString(36).slice(2),
     favorecido,
     pcNumero: dataPagISO ? pcLabelForPayment(dataPagISO) : "",
     cnpj: cnpjDigits ? maskCNPJ(cnpjDigits) : "",
-
-    // NF
     dataTitulo: dataTituloISO || "",
-    nf: nfCurta || "",
-
-    // Comprovante
+    data_emissao_iso: dataTituloISO || "",
+    nf: nfMask || nfNine || "",
+    nf_mask: nfMask || "",
+    nf_num_9: nfNine || "",
+    nf_num_9_mask: nfMask || "",
     nExtrato,
     dataPagamento: dataPagISO || "",
     valor: valorNum,
-
-    // Tela
-    rubrica: selRubrica?.value || "",
-    mesLabel,
-
-    // Ofício
+    rubrica: rubSel.label || "",
+    tipoRubrica: rubSel.label || "",
+    rubricaValue: rubSel.value || "",
+    mesLabel: mesLabel || "",
+    mesAno: mesAnoValue || "",
     just: (document.querySelector("#inputJust")?.value || lastParsedDocs?.just || "").trim(),
-
-    // Anexos
+    objeto: objetoAI,
+    cotacaoObjeto: objetoAI,
+    cotacoes_objeto: objetoAI,
+    propostas: propostasAI,
+    cotacoes_propostas: clonePropostas(propostasAI),
+    cotacoes_avisos: avisosAI,
+    cotacoesAvisos: avisosAI,
     docs: {
-      nf:          window.formDocs?.nf || null,
-      oficio:      window.formDocs?.oficio || null,
-      ordem:       window.formDocs?.ordem || null,
-      cotacoes:    Array.isArray(window.formDocs?.cotacoes) ? [...window.formDocs.cotacoes] : [],
-      comprovante: window.formDocs?.comprovante || null
-    }
+      nf: window.formDocs?.nf || null,
+      oficio: window.formDocs?.oficio || null,
+      ordem: window.formDocs?.ordem || null,
+      cotacoes: Array.isArray(window.formDocs?.cotacoes) ? [...window.formDocs.cotacoes] : [],
+      comprovante: window.formDocs?.comprovante || null,
+    },
   };
 
-  // adiciona no topo e renderiza
+  didLocalAdd = true;
   (window.rows || (window.rows = [])).unshift(row);
+  markTableDirty();
+
   const tbody = document.querySelector("#tbl-pc tbody");
   if (tbody) {
-    // reusa tua função render() se existir
     if (typeof window.render === "function") window.render();
     else {
-      // fallback rápido (caso não esteja no escopo global)
       const formatDateBR = (input) => {
         if (!input) return "";
         if (/^\d{2}\/\d{2}\/\d{4}$/.test(input)) return input;
@@ -396,15 +532,15 @@ if (!haveNF || !havePay) return;
         if (m) return `${m[3]}/${m[2]}/${m[1]}`;
         const d = new Date(input);
         if (!isNaN(d)) {
-          const dd = String(d.getDate()).padStart(2,"0");
-          const mm = String(d.getMonth()+1).padStart(2,"0");
+          const dd = String(d.getDate()).padStart(2, "0");
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
           const yy = d.getFullYear();
           return `${dd}/${mm}/${yy}`;
         }
         return String(input);
       };
-      const formatBRL = (v) => v==null||v==="" ? "" : new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(v));
-      const esc = (t="") => String(t).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+      const formatBRL = (v) => (v == null || v === "" ? "" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v)));
+      const esc = (t = "") => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       const r = row;
       const tr = document.createElement("tr");
       tr.innerHTML = `
@@ -417,7 +553,7 @@ if (!haveNF || !havePay) return;
         <td>${esc(formatDateBR(r.dataPagamento) || "")}</td>
         <td>${esc(formatBRL(r.valor) || "")}</td>
         <td>${esc(r.rubrica || "")}</td>
-        <td>${esc(r.mesLabel || "")}</td>
+        <td>${esc(r.mesAno || r.mesLabel || "")}</td>
         <td>${esc(r.just || "")}</td>
         <td>—</td>
         <td style="text-align:right;white-space:nowrap;">
@@ -427,9 +563,7 @@ if (!haveNF || !havePay) return;
     }
   }
 
-  // memoriza hash para não duplicar
   autoInsertedHash = h;
-
   console.log("[auto-insert]", { reason, row });
 }
   /* ================== Binds de upload ================== */
@@ -769,19 +903,29 @@ function buildRowFromState() {
     return (typeof lastParsedPay?.valor_num === "number") ? lastParsedPay.valor_num : null;
   })();
 
-  // Mês/Ano (preferir input se existir; senão deriva do comprovante)
-  const mesAnoForm  = (inMesAno?.value || "").trim();
-  const mesLabel    = mesAnoForm
-    ? (() => {
-        const [mm, yyyy] = mesAnoForm.split("/");
-        const M = Number(mm);
-        const nomes = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
-        return (nomes[M-1] && yyyy) ? `${nomes[M-1]}/${yyyy}` : "";
-      })()
-    : (lastParsedDocs?.mesLabel || (dataPagISO ? (() => {
-          const d=new Date(`${dataPagISO}T00:00:00`);
-          return ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"][d.getMonth()]+"/"+d.getFullYear();
-        })() : ""));
+  // Mês/Ano (preferir input; senão deriva do comprovante)
+  const mesAnoForm = (inMesAno?.value || "").trim();
+  const mesAnoValue = (() => {
+    if (mesAnoForm) {
+      if (/^\d{2}\/\d{4}$/.test(mesAnoForm)) return mesAnoForm;
+      const fromLabel = labelToMesAno(mesAnoForm);
+      return fromLabel || mesAnoForm;
+    }
+    if (lastParsedDocs?.mesLabel) {
+      const fromDocs = labelToMesAno(lastParsedDocs.mesLabel);
+      if (fromDocs) return fromDocs;
+    }
+    if (dataPagISO) {
+      const fromIso = isoToMesAno(dataPagISO);
+      if (fromIso) return fromIso;
+    }
+    return "";
+  })();
+  const mesLabel = mesAnoValue
+    ? mesAnoToLabel(mesAnoValue)
+    : (lastParsedDocs?.mesLabel || (dataPagISO ? monthLabelPlusOne(dataPagISO) : ""));
+
+  const rubSel = getRubricaSelection(selRubrica);
 
   const row = {
     id: Math.random().toString(36).slice(2),
@@ -800,8 +944,11 @@ function buildRowFromState() {
     valor: valorNum,
 
     // DA TELA
-    rubrica: selRubrica?.value || "",
+    rubrica: rubSel.label || "",
+    tipoRubrica: rubSel.label || "",
+    rubricaValue: rubSel.value || "",
     mesLabel,
+    mesAno: mesAnoValue || "",
 
     // DO OFÍCIO
     just: (inJust?.value || lastParsedDocs?.just || "").trim(),
@@ -829,6 +976,7 @@ function attemptAutoAppendRow() {
   if (!canBuildRow()) return false;
   const row = buildRowFromState();
   rows.unshift(row);
+  markTableDirty();
   render();
   clearFormForNext?.();
   return true;
@@ -843,6 +991,7 @@ function nfFromChave(chave44){
   return c.slice(25, 34);
 }
 function nfDisplay(r){
+  if (r.nf_mask)       return r.nf_mask;
   if (r.nf_num_9_mask) return r.nf_num_9_mask;
   if (r.nf_num_9)      return mask9(r.nf_num_9);
   if (r.nf_num_mask)   return r.nf_num_mask;
@@ -880,11 +1029,9 @@ function render() {
       <td data-col="dataPagamento">${esc(formatDateBR(r.dataPagamento) || "")}</td>
       <td data-col="valor">${esc(formatBRL(r.valor) || "")}</td>
 
-      <td data-col="tipoRubrica">${
-        esc(selRubrica?.options?.[selRubrica.selectedIndex]?.text || r.rubrica || "")
-      }</td>
+      <td data-col="tipoRubrica">${esc(resolveRubricaLabel(r) || "")}</td>
 
-      <td data-col="mesAno">${esc(r.mesLabel || "")}</td>
+      <td data-col="mesAno">${esc(resolveMesAno(r) || resolveMesLabel(r) || "")}</td>
       <td data-col="just">${esc(r.just || "")}</td>
 
       <td>${docBadge(r)}</td>
@@ -946,8 +1093,44 @@ document.addEventListener("click", async (e) => {
       // força a célula NF a usar nosso helper
       const tdNf = tr.querySelector('[data-col="nf"]');
       if (tdNf) tdNf.textContent = nfDisplay(r.data);
+
+      const respRow = r.data;
+      const rowId = respRow?.id || payload.id || id;
+      const idxRow = rows.findIndex((row) => String(row.id) === String(rowId));
+      if (idxRow >= 0) {
+        const prev = rows[idxRow];
+        const mergedRow = { ...prev, ...respRow };
+        if (Array.isArray(respRow.propostas)) {
+          mergedRow.propostas = clonePropostas(respRow.propostas);
+          mergedRow.cotacoes_propostas = clonePropostas(respRow.propostas);
+        } else if (Array.isArray(prev.propostas)) {
+          mergedRow.propostas = clonePropostas(prev.propostas);
+          if (!Array.isArray(mergedRow.cotacoes_propostas)) {
+            mergedRow.cotacoes_propostas = clonePropostas(prev.propostas);
+          }
+        }
+        if (!Array.isArray(mergedRow.cotacoes_propostas) && Array.isArray(prev.cotacoes_propostas)) {
+          mergedRow.cotacoes_propostas = clonePropostas(prev.cotacoes_propostas);
+        }
+        if (respRow.objeto) {
+          mergedRow.objeto = respRow.objeto;
+          mergedRow.cotacaoObjeto = respRow.objeto;
+          mergedRow.cotacoes_objeto = respRow.objeto;
+        } else {
+          if (!mergedRow.objeto && prev.objeto) mergedRow.objeto = prev.objeto;
+          if (!mergedRow.cotacoes_objeto && prev.cotacoes_objeto) mergedRow.cotacoes_objeto = prev.cotacoes_objeto;
+        }
+        if (Array.isArray(respRow.cotacoes_avisos)) {
+          mergedRow.cotacoes_avisos = cloneAvisos(respRow.cotacoes_avisos);
+        } else if (Array.isArray(prev.cotacoes_avisos)) {
+          mergedRow.cotacoes_avisos = cloneAvisos(prev.cotacoes_avisos);
+        }
+        rows[idxRow] = mergedRow;
+      }
+
       disableInlineEdit(tr);
       toggleButtons(tr, { editar:true, salvar:false, cancelar:false });
+      markTableDirty();
     } else {
       alert("Falha ao salvar a linha.");
     }
@@ -987,7 +1170,7 @@ function applyRowValues(tr, row) {
     if (td) td.textContent = v ?? "";
   };
   set("dataTitulo", row.dataTitulo || "");
-  set("nf", row.nf_num || row.nf_num_mask || row.nf_num_9_mask || row.nf_num_9 || row.nf || "");
+  set("nf", nfDisplay(row));
   set("nExtrato", row.nExtrato || "");
   set("dataPagamento", row.dataPagamento || "");
   set("valor", row.valor != null ? `R$ ${Number(row.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "");
@@ -1006,96 +1189,292 @@ function toggleButtons(tr, map) {
 }
 
   tblBody.addEventListener("click", (e) => {
-    const b = e.target.closest(".pc-edit-actions [data-act]");
-  if (b) e.stopPropagation(); 
-   const btnDel = e.target.closest("[data-act='del']");
+    const b = e.target.closest(".pc-edit-actions [data-act]");
+    if (b) e.stopPropagation();
+    const btnDel = e.target.closest("[data-act='del']");
     if (btnDel) {
       const tr = btnDel.closest("tr");
       const id = tr?.dataset?.id;
-      const idx = rows.findIndex(r => r.id === id);
-      if (idx >= 0) { rows.splice(idx,1); render(); }
+      const idx = rows.findIndex((r) => r.id === id);
+      if (idx >= 0) { rows.splice(idx, 1); render(); markTableDirty(); }
       return;
     }
     const tr = e.target.closest("tr[data-id]");
     if (!tr) return;
-    const row = rows.find(r => r.id === tr.dataset.id);
+    const row = rows.find((r) => r.id === tr.dataset.id);
     if (row) openPCModal(row);
   });
 
-  function openPCModal(row) {
-    const toBR = formatDateBR;
-    if (!pcModal || !row) return;
-    const setVal = (sel,val) => { const el = pcModal.querySelector(sel); if (el) el.value = val; };
+  const modalEditableSelectors = [
+    "#md-fav",
+    "#md-cnpj",
+    "#md-pc",
+    "#md-data-titulo",
+    "#md-nf",
+    "#md-extrato",
+    "#md-data-pagto",
+    "#md-valor",
+    "#md-mesano",
+    "#md-just",
+  ];
 
-    setVal('#md-fav',        row.favorecido || '—');
-    setVal('#md-cnpj',       row.cnpj || '—');
-    setVal('#md-pc',         row.pcNumero || '—');
-    setVal('#md-data-titulo',toBR(row.dataTitulo) || '—');
-    setVal('#md-nf',         row.nf || '—');
-    setVal('#md-extrato',    row.nExtrato || '—');
-    setVal('#md-data-pagto', toBR(row.dataPagamento) || '—');
-    setVal('#md-rubrica',    row.rubrica || row.tipoRubrica || '—');
-    setVal('#md-mesano',     row.mesLabel || '—');
-    setVal('#md-just',       row.just || '—');
-
-    const docArea = pcModal.querySelector("#md-docs");
-    if (docArea) {
-      const d = row.docs || {};
-      const parts = [];
-      if (d.nf)         parts.push(`<a href="${d.nf.url}" target="_blank" rel="noopener">NF/Recibo</a>`);
-      if (d.oficio)     parts.push(`<a href="${d.oficio.url}" target="_blank" rel="noopener">Ofício</a>`);
-      if (d.ordem)      parts.push(`<a href="${d.ordem.url}" target="_blank" rel="noopener">Ordem de fornecimento</a>`);
-      if (Array.isArray(d.cotacoes) && d.cotacoes.length)
-        d.cotacoes.forEach((c,i)=> parts.push(`<a href="${c.url}" target="_blank" rel="noopener">Cotação ${i+1}</a>`));
-      if (d.comprovante) parts.push(`<a href="${d.comprovante.url}" target="_blank" rel="noopener">Comprovante</a>`);
-      docArea.innerHTML = parts.length ? parts.join(" · ") : '<span class="muted">sem anexos</span>';
-    }
-
-    pcModal.dataset.rowId = row.id;
-    if (pcModal.showModal) pcModal.showModal(); else pcModal.setAttribute("open","");
-    document.body.classList.add('modal-open');
+  function toggleDocsList(row) {
+    if (!modalDocsArea) return;
+    const docs = row?.docs || {};
+    const links = [];
+    if (docs.nf) {
+      const href = docs.nf.url || docs.nf.link || "";
+      const label = "NF/Recibo";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    if (docs.oficio) {
+      const href = docs.oficio.url || docs.oficio.link || "";
+      const label = "Ofício";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    if (docs.ordem) {
+      const href = docs.ordem.url || docs.ordem.link || "";
+      const label = "Ordem de fornecimento";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    if (Array.isArray(docs.cotacoes) && docs.cotacoes.length) {
+      docs.cotacoes.forEach((c, i) => {
+        const name = c?.originalname || c?.name || `Cotação ${i + 1}`;
+        const href = c?.url || c?.link || "";
+        const safeName = esc(name);
+        links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${safeName}</a>` : safeName);
+      });
+    }
+    if (docs.comprovante) {
+      const href = docs.comprovante.url || docs.comprovante.link || "";
+      const label = "Comprovante";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    modalDocsArea.innerHTML = links.length ? links.join(" · ") : '<span class="muted">Sem documentos anexados.</span>';
   }
-// salve a rubrica no objeto da linha quando o usuário confirmar
-const pcSave = document.querySelector("#pc-save"); // id do botão "Salvar" do modal
-pcSave?.addEventListener("click", () => {
-  const id = pcModal?.dataset?.rowId;
-  const row = rows.find(r => String(r.id) === String(id));
-  if (!row) return;
 
-  // pega do campo do modal (input ou select), preferindo o valor digitado/selecionado
-  const rubEl = pcModal.querySelector("#md-rubrica");
-  let rubricaValue = "";
-  if (rubEl) {
-    if (rubEl.tagName === "SELECT") {
-      const opt = rubEl.options[rubEl.selectedIndex];
-      rubricaValue = (opt?.text || rubEl.value || "").trim();
+  function setModalValue(selector, value) {
+    const el = pcModal?.querySelector(selector);
+    if (!el) return;
+    if (el.tagName === "SELECT") {
+      const val = String(value ?? "");
+      let applied = false;
+      if (val && el.querySelector(`option[value="${cssEscape(val)}"]`)) {
+        el.value = val;
+        applied = true;
+      }
+      if (!applied) {
+        const label = String(value ?? "").trim();
+        const match = Array.from(el.options).find((opt) => opt.textContent?.trim() === label);
+        el.value = match ? match.value : "";
+      }
+    } else if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      el.value = value ?? "";
+    }
+  }
+
+  function fillModalWithRow(row) {
+    if (!pcModal || !row) return;
+    const fav = row.favorecido || "";
+    const cnpjDigits = onlyDigits(row.cnpj || "");
+    const cnpjDisplay = cnpjDigits.length === 14 ? maskCNPJ(cnpjDigits) : (row.cnpj || "");
+    const pcNumero = row.pcNumero || "";
+    const dataTitulo = formatDateBR(row.dataTitulo) || "";
+    const nfLabel = nfDisplay(row) || row.nf || "";
+    const extrato = row.nExtrato || "";
+    const dataPagamento = formatDateBR(row.dataPagamento) || "";
+    const valor = formatBRL(row.valor) || "";
+    const mesAno = resolveMesAno(row) || "";
+    const just = row.just || "";
+    const rubricaLabel = resolveRubricaLabel(row) || "";
+
+    setModalValue("#md-fav", fav);
+    setModalValue("#md-cnpj", cnpjDisplay);
+    setModalValue("#md-pc", pcNumero);
+    setModalValue("#md-data-titulo", dataTitulo);
+    setModalValue("#md-nf", nfLabel);
+    setModalValue("#md-extrato", extrato);
+    setModalValue("#md-data-pagto", dataPagamento);
+    setModalValue("#md-valor", valor);
+    setModalValue("#md-mesano", mesAno);
+    setModalValue("#md-just", just);
+    if (modalRubrica) {
+      Array.from(modalRubrica.querySelectorAll("option[data-temp='1']")).forEach((opt) => opt.remove());
+      let applied = false;
+      if (row.rubricaValue && modalRubrica.querySelector(`option[value="${cssEscape(row.rubricaValue)}"]`)) {
+        modalRubrica.value = row.rubricaValue;
+        applied = true;
+      } else if (rubricaLabel) {
+        const match = Array.from(modalRubrica.options).find((opt) => opt.textContent?.trim() === rubricaLabel);
+        if (match) {
+          modalRubrica.value = match.value;
+          applied = true;
+        }
+      }
+      if (!applied) {
+        if (rubricaLabel) {
+          const temp = document.createElement("option");
+          temp.value = rubricaLabel;
+          temp.textContent = rubricaLabel;
+          temp.dataset.temp = "1";
+          modalRubrica.appendChild(temp);
+          modalRubrica.value = temp.value;
+        } else {
+          modalRubrica.value = "";
+        }
+      }
+    }
+
+    toggleDocsList(row);
+    if (modalFeedback) modalFeedback.textContent = "";
+  }
+
+  function setModalEditMode(enabled) {
+    const els = modalEditableSelectors
+      .map((sel) => pcModal?.querySelector(sel))
+      .filter(Boolean);
+    els.forEach((el) => {
+      if (el.tagName === "SELECT") el.disabled = !enabled;
+      else el.readOnly = !enabled;
+      el.classList.toggle("is-editing", enabled);
+    });
+    if (modalRubrica) modalRubrica.disabled = !enabled;
+    if (btnModalEdit) btnModalEdit.hidden = enabled;
+    if (btnModalSave) btnModalSave.hidden = !enabled;
+  }
+
+  function openPCModal(row) {
+    if (!pcModal || !row) return;
+    pcModal.dataset.rowId = row.id;
+    fillModalWithRow(row);
+    setModalEditMode(false);
+    if (pcModal.showModal) pcModal.showModal();
+    else pcModal.setAttribute("open", "");
+    document.body.classList.add("modal-open");
+  }
+
+  function closePCModal() {
+    if (!pcModal) return;
+    setModalEditMode(false);
+    if (pcModal.close) pcModal.close();
+    else pcModal.removeAttribute("open");
+    document.body.classList.remove("modal-open");
+    if (modalFeedback) modalFeedback.textContent = "";
+  }
+
+  function saveModalDetails() {
+    if (!pcModal) return;
+    const id = pcModal.dataset.rowId;
+    if (!id) return;
+    const row = rows.find((r) => String(r.id) === String(id));
+    if (!row) return;
+
+    const getInput = (sel) => (pcModal.querySelector(sel)?.value || "").trim();
+    row.favorecido = getInput("#md-fav");
+
+    const cnpjInput = getInput("#md-cnpj");
+    const cnpjDigits = onlyDigits(cnpjInput);
+    row.cnpj = cnpjDigits.length === 14 ? maskCNPJ(cnpjDigits) : cnpjInput;
+
+    const pcNumero = getInput("#md-pc");
+    row.pcNumero = pcNumero;
+
+    const dataTituloInput = getInput("#md-data-titulo");
+    const dataTituloISO = toISODate(dataTituloInput) || dataTituloInput;
+    row.dataTitulo = dataTituloISO;
+
+    const nfInput = getInput("#md-nf");
+    const nfDigits = nfInput.replace(/\D/g, "");
+    if (nfDigits) {
+      const normalized = leftPad9(nfDigits).slice(-9);
+      const masked = mask9(normalized);
+      row.nf = masked;
+      row.nf_num = normalized;
+      row.nf_num_mask = masked;
+      row.nf_num_9 = normalized;
+      row.nf_num_9_mask = masked;
     } else {
-      rubricaValue = (rubEl.value || rubEl.textContent || "").trim();
+      row.nf = nfInput;
+      row.nf_num = nfInput;
+      row.nf_num_mask = nfInput;
+      row.nf_num_9 = nfInput.replace(/\D/g, "");
+      row.nf_num_9_mask = nfInput;
+    }
+
+    row.nExtrato = getInput("#md-extrato");
+
+    const dataPagInput = getInput("#md-data-pagto");
+    const dataPagISO = toISODate(dataPagInput) || dataPagInput;
+    row.dataPagamento = dataPagISO;
+
+    const valorInput = getInput("#md-valor");
+    const valorNum = parseMoneyBR(valorInput);
+    row.valor = valorNum != null ? valorNum : valorInput;
+
+    const rubValue = modalRubrica?.value?.trim() || "";
+    const rubLabel = modalRubrica?.selectedOptions?.[0]?.text?.trim() || rubValue;
+    row.rubricaValue = rubValue;
+    row.rubrica = rubLabel;
+    row.tipoRubrica = rubLabel;
+
+    let mesAno = getInput("#md-mesano");
+    if (mesAno) {
+      if (!/^\d{2}\/\d{4}$/.test(mesAno)) {
+        const conv = labelToMesAno(mesAno);
+        if (conv) mesAno = conv;
+      }
+    } else if (row.dataPagamento) {
+      mesAno = isoToMesAno(row.dataPagamento) || "";
+    }
+    row.mesAno = mesAno;
+    row.mesLabel = mesAno ? mesAnoToLabel(mesAno) : row.mesLabel;
+
+    row.just = getInput("#md-just");
+
+    if (!row.pcNumero && row.dataPagamento) {
+      row.pcNumero = pcLabelForPayment(row.dataPagamento);
+    }
+
+    fillModalWithRow(row);
+    setModalEditMode(false);
+    render();
+    markTableDirty();
+
+    if (modalFeedback) {
+      modalFeedback.textContent = "Detalhamento atualizado.";
+      setTimeout(() => {
+        if (modalFeedback.textContent === "Detalhamento atualizado.") {
+          modalFeedback.textContent = "";
+        }
+      }, 3000);
     }
   }
 
-  if (rubricaValue) {
-    row.rubrica = rubricaValue;        // ✅ fixa na linha
-    row.tipoRubrica = rubricaValue;    // (se você ainda usa esse campo em algum lugar)
-  }
+  btnModalEdit?.addEventListener("click", () => {
+    setModalEditMode(true);
+    const firstEditable = modalEditableSelectors
+      .map((sel) => pcModal?.querySelector(sel))
+      .find((el) => el && el.tagName !== "SELECT");
+    firstEditable?.focus();
+    if (modalFeedback) modalFeedback.textContent = "";
+  });
 
-  // ... aqui continue salvando os demais campos do modal do jeito que já faz
-  closePCModal();
-  render?.(); // se você tiver uma função que re-renderiza a tabela
-});
-  function closePCModal() {
-    if (!pcModal) return;
-    if (pcModal.close) pcModal.close(); else pcModal.removeAttribute("open");
-    document.body.classList.remove('modal-open');
-  }
-  pcClose?.addEventListener("click", closePCModal);
-  pcModal?.addEventListener("cancel", (e) => { e.preventDefault(); closePCModal(); });
-  pcModal?.addEventListener("click", (e) => {
-    const rect = pcModal.querySelector('.modal__content')?.getBoundingClientRect();
-    if (!rect) return;
-    const inside = e.clientX>=rect.left && e.clientX<=rect.right && e.clientY>=rect.top && e.clientY<=rect.bottom;
-    if (!inside) closePCModal();
-  });
+  btnModalSave?.addEventListener("click", () => {
+    saveModalDetails();
+  });
+
+  pcClose?.addEventListener("click", closePCModal);
+  pcModal?.addEventListener("cancel", (e) => { e.preventDefault(); closePCModal(); });
+  pcModal?.addEventListener("click", (e) => {
+    const rect = pcModal.querySelector('.modal__content')?.getBoundingClientRect();
+    if (!rect) return;
+    const inside =
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom;
+    if (!inside) closePCModal();
+  });
 
   /* ================== Carregar projeto + linhas ================== */
   (async () => {
@@ -1160,7 +1539,7 @@ pcSave?.addEventListener("click", () => {
   const monthLabelPlusOne = (isoDate) => {
     if (!isoDate) return "";
     const d = new Date(`${isoDate}T00:00:00`);
-    d.setMonth(d.getMonth()+1);
+    if (Number.isNaN(d.getTime())) return "";
     return `${abbr[d.getMonth()]}/${d.getFullYear()}`;
   };
 
@@ -1214,14 +1593,40 @@ form.addEventListener("submit", async (e) => {
     })();
 
     // Mês/Ano
-    const mesAnoForm = (inMesAno?.value || "").trim(); // MM/AAAA
-    const mesLabel   = mesAnoForm
-      ? (() => {
-          const [mm, yyyy] = mesAnoForm.split("/");
-          const m = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"][Number(mm)-1] || "";
-          return m && yyyy ? `${m}/${yyyy}` : "";
-        })()
+    const mesAnoForm = (inMesAno?.value || "").trim();
+    const mesAnoValue = (() => {
+      if (mesAnoForm) {
+        if (/^\d{2}\/\d{4}$/.test(mesAnoForm)) return mesAnoForm;
+        const fromLabel = labelToMesAno(mesAnoForm);
+        return fromLabel || mesAnoForm;
+      }
+      if (lastParsedDocs?.mesLabel) {
+        const fromDocs = labelToMesAno(lastParsedDocs.mesLabel);
+        if (fromDocs) return fromDocs;
+      }
+      if (dataPagISO) {
+        const fromIso = isoToMesAno(dataPagISO);
+        if (fromIso) return fromIso;
+      }
+      return "";
+    })();
+    const mesLabel = mesAnoValue
+      ? mesAnoToLabel(mesAnoValue)
       : (lastParsedDocs?.mesLabel || (dataPagISO ? monthLabelPlusOne(dataPagISO) : ""));
+
+    const rubSel = getRubricaSelection(selRubrica);
+
+    const nfNine = lastParsedDocs?.nf_num_9 || leftPad9(
+      nfCurta ||
+      lastParsedDocs?.nf ||
+      lastParsedDocs?.nf_num ||
+      lastParsedDocs?.nf_num_mask ||
+      lastParsedDocs?.nf_num_9_mask
+    );
+    const nfMask = lastParsedDocs?.nf_num_9_mask || (nfNine ? mask9(nfNine) : "");
+    const objetoAI = normalizeObjeto(lastParsedDocs?.cotacoes_objeto || lastParsedDocs?.objeto || "");
+    const propostasAI = clonePropostas(lastParsedDocs?.cotacoes_propostas || lastParsedDocs?.propostas || []);
+    const avisosAI = cloneAvisos(lastParsedDocs?.cotacoes_avisos || []);
 
     // Linha
     const row = {
@@ -1230,13 +1635,27 @@ form.addEventListener("submit", async (e) => {
       pcNumero: dataPagISO ? pcLabelForPayment(dataPagISO) : "",
       cnpj: cnpjDigits ? maskCNPJ(cnpjDigits) : "",
       dataTitulo: dataTituloISO || "",
-      nf: nfCurta || "",
+      data_emissao_iso: dataTituloISO || "",
+      nf: nfMask || nfNine || "",
+      nf_mask: nfMask || "",
+      nf_num_9: nfNine || "",
+      nf_num_9_mask: nfMask || "",
       nExtrato,
       dataPagamento: dataPagISO || "",
       valor: valorNum,
-      rubrica: selRubrica?.value || "",
+      rubrica: rubSel.label || "",
+      tipoRubrica: rubSel.label || "",
+      rubricaValue: rubSel.value || "",
       mesLabel,
+      mesAno: mesAnoValue || "",
       just: (inJust?.value || lastParsedDocs?.just || "").trim(),
+      objeto: objetoAI,
+      cotacaoObjeto: objetoAI,
+      cotacoes_objeto: objetoAI,
+      propostas: propostasAI,
+      cotacoes_propostas: clonePropostas(propostasAI),
+      cotacoes_avisos: avisosAI,
+      cotacoesAvisos: avisosAI,
       docs: {
         nf: formDocs.nf || null,
         oficio: formDocs.oficio || null,
@@ -1248,6 +1667,7 @@ form.addEventListener("submit", async (e) => {
 
     console.log("[ADD ROW] =>", row);
     rows.unshift(row);
+    markTableDirty();
     render();
     clearFormForNext();
   } catch (err) {
@@ -1697,6 +2117,7 @@ form.addEventListener("submit", async (e) => {
       numeroPc:      S(row.pcNumero),
       projeto:       S(proj.titulo),
       prestacao:     S(natureza), // <- EXATO
+      tipoRubrica:   S(natureza),
       favorecido:    S(row.favorecido),
       cnpjFav:       S(row.cnpj),
       extrato:       S(row.nExtrato || row.numeroExtrato),
@@ -1758,15 +2179,25 @@ form.addEventListener("submit", async (e) => {
     const cotacoesSlim = pickCotacoesFromRow(row);
 
     // Propostas preenchidas manualmente (se houver na linha)
-    let propostasEstr = Array.isArray(row?.propostas) ? row.propostas : [];
+    let propostasEstr = Array.isArray(row?.propostas) ? clonePropostas(row.propostas) : [];
+    if (!propostasEstr.length && Array.isArray(row?.cotacoes_propostas)) {
+      propostasEstr = clonePropostas(row.cotacoes_propostas);
+    }
+    if (!propostasEstr.length && Array.isArray(lastParsedDocs?.cotacoes_propostas)) {
+      propostasEstr = clonePropostas(lastParsedDocs.cotacoes_propostas);
+    }
     propostasEstr = propostasEstr
-      .map(p => ({
-        selecao:        S(p.selecao || p.selecionada || ""),
-        ofertante:      S(p.ofertante || p.fornecedor || ""),
-        cnpj_ofertante: S(p.cnpj || p.cpf || ""),
-        data_cotacao:   toBR(p.data || p.dataCotacao || ""),
-        valor:          S(p.valor || p.preco || p.total || "")
-      }))
+      .map((p, idx) => {
+        const valorNum = typeof p.valor_num === "number" ? p.valor_num : (typeof p.valor === "number" ? p.valor : null);
+        const valorRaw = valorNum != null ? valorNum : S(p.valor || p.preco || p.total || "");
+        return {
+          selecao:        S(p.selecao || p.selecionada || "") || `Cotação ${idx + 1}`,
+          ofertante:      S(p.ofertante || p.fornecedor || ""),
+          cnpj_ofertante: S(p.cnpj || p.cnpj_ofertante || p.cpf || ""),
+          data_cotacao:   toBR(p.data_cotacao || p.dataCotacao || p.data || ""),
+          valor:          valorRaw,
+        };
+      })
       .filter(p => p.ofertante || p.cnpj_ofertante || p.data_cotacao || p.valor);
 
     const propostas = normalizaPropostas(propostasEstr);
@@ -1777,6 +2208,15 @@ form.addEventListener("submit", async (e) => {
     const mes = String(baseDate.getMonth()+1).padStart(2,"0");
     const ano = String(baseDate.getFullYear());
 
+    const objetoDesc = normalizeObjeto(
+      row.objeto ||
+      row.cotacaoObjeto ||
+      row.cotacoes_objeto ||
+      row.objetoDescricao ||
+      lastParsedDocs?.cotacoes_objeto ||
+      ""
+    ) || "Não informado";
+
     const payload = {
       instituicao:   S(proj.instituicao || "EDGE"),
       cnpj:          S(proj.cnpj),
@@ -1784,6 +2224,7 @@ form.addEventListener("submit", async (e) => {
       numeroPc:      S(row.pcNumero),
       projeto:       S(proj.titulo),
       prestacao:     S(natureza), // <- EXATO
+      tipoRubrica:   S(natureza),
       favorecido:    S(row.favorecido),
       cnpjFav:       S(row.cnpj),
       extrato:       S(row.nExtrato || row.numeroExtrato),
@@ -1796,6 +2237,8 @@ form.addEventListener("submit", async (e) => {
       dia, mes, ano,
       coordenador:   S(proj.coordenador || ""),
       filenameHint:  `MapaCotacao_${S(proj.codigo || "Projeto")}_${S(row.pcNumero || "")}`,
+      objetoDescricao: objetoDesc,
+      objeto: objetoDesc,
 
       // campos do template
       codigo_projeto: S(proj.codigo),
@@ -1817,7 +2260,7 @@ form.addEventListener("submit", async (e) => {
       },
       processo: {
         naturezaDisp:     S(natureza),
-        objeto:           S(row.objeto || ""),
+        objeto:           S(objetoDesc),
         justificativa:    S(row.just || row.justificativa || ""),
         dataAquisicaoISO: S(row.dataPagamento || ""),
       },
@@ -1827,6 +2270,9 @@ form.addEventListener("submit", async (e) => {
 
     // Sempre mande 'propostas' (mesmo vazia) para o loop do template
     payload.propostas = propostas;
+    if (Array.isArray(row.cotacoes_avisos) && row.cotacoes_avisos.length) {
+      payload.cotacoesAvisos = cloneAvisos(row.cotacoes_avisos);
+    }
 
     console.log("[docfin] buildPayloadMapa", {
       propostasLen: propostas.length,

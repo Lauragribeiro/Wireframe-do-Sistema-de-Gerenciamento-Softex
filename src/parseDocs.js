@@ -324,6 +324,155 @@ function extractJust_local(text = "") {
   return (m && m[1]) ? m[1].trim() : "";
 }
 
+function maskDocBR(doc = "") {
+  const digits = onlyDigits(doc);
+  if (digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, "$1.$2.$3/$4-$5");
+  }
+  if (digits.length === 11) {
+    return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2}).*$/, "$1.$2.$3-$4");
+  }
+  return doc ? String(doc).trim() : "";
+}
+
+function parseMoneyToNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value === null || value === undefined) return null;
+  const str = String(value)
+    .replace(/[^0-9,.-]/g, "")
+    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".");
+  const num = Number(str);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeCotacaoProposta(entry, idx = 0) {
+  if (!entry || typeof entry !== "object") return null;
+
+  const selecaoRaw = String(entry.selecao ?? "").trim();
+  const marcada = entry.selecionada === true || /selecionad/i.test(selecaoRaw);
+  let selecao = selecaoRaw || (marcada ? "SELECIONADA" : "");
+  if (!selecao) selecao = `Cotação ${idx + 1}`;
+  if (marcada) selecao = "SELECIONADA";
+
+  const ofertante = String(entry.ofertante ?? entry.fornecedor ?? entry.nome ?? "").trim() || "Não informado";
+
+  const docRaw = String(
+    entry.cnpj ?? entry.cnpj_ofertante ?? entry.cnpjCpf ?? entry.cnpj_cpf ?? entry.cpf ?? ""
+  ).trim();
+  const docMasked = maskDocBR(docRaw);
+  const documento = docMasked || docRaw || "Não informado";
+
+  const dataISO = toISO(
+    entry.dataCotacao ?? entry.data_cotacao ?? entry.data ?? entry.dataCotacaoISO ?? entry.data_cotacao_iso ?? ""
+  );
+  const dataBR = dataISO
+    ? toBRDate(dataISO)
+    : (String(entry.dataCotacao ?? entry.data_cotacao ?? entry.data ?? "").trim() || "Não informado");
+
+  const valorNum = parseMoneyToNumber(
+    entry.valor_num ?? entry.valor ?? entry.valor_total ?? entry.total ?? entry.valorProposta ?? entry.preco
+  );
+  const valorLabel = String(entry.valor ?? entry.valor_total ?? entry.total ?? "").trim();
+
+  const out = {
+    selecao,
+    ofertante,
+    cnpj: documento,
+    cnpj_ofertante: documento,
+    dataCotacao: dataBR,
+    data_cotacao: dataBR,
+  };
+
+  if (dataISO) out.data_cotacao_iso = dataISO;
+
+  if (Number.isFinite(valorNum)) {
+    out.valor = valorNum;
+    out.valor_num = valorNum;
+  } else {
+    out.valor = valorLabel || "Não informado";
+    out.valor_num = null;
+  }
+
+  if (!out.ofertante) out.ofertante = "Não informado";
+  if (!out.cnpj) {
+    out.cnpj = "Não informado";
+    out.cnpj_ofertante = "Não informado";
+  }
+  if (!out.dataCotacao) {
+    out.dataCotacao = "Não informado";
+    out.data_cotacao = "Não informado";
+  }
+  if (out.valor === "") out.valor = "Não informado";
+
+  return out;
+}
+
+async function analyzeCotacoesWithLLM(namedTexts = []) {
+  if (!openai) return null;
+  const sections = namedTexts
+    .map((item, idx) => {
+      const name = item?.name || `Cotação ${idx + 1}`;
+      const text = String(item?.text || "").slice(0, 20000);
+      if (!text.trim()) return null;
+      return `### COTAÇÃO ${idx + 1} (${name})\n${text}`;
+    })
+    .filter(Boolean);
+
+  if (!sections.length) return null;
+
+  const system = {
+    role: "system",
+    content:
+      "Você interpreta documentos de cotação brasileiros e deve extrair dados estruturados sem inventar informações." +
+      "\nResponda apenas com JSON válido contendo as chaves:" +
+      "\n{\n  \"objeto\": \"Descrição do item ou serviço comum entre as propostas\"," +
+      "\n  \"propostas\": [" +
+      "\n    {" +
+      "\n      \"selecao\": \"Cotação X ou SELECIONADA\"," +
+      "\n      \"ofertante\": \"Nome/Razão Social\"," +
+      "\n      \"cnpj\": \"CNPJ ou CPF\"," +
+      "\n      \"dataCotacao\": \"DD/MM/AAAA\"," +
+      "\n      \"valor\": \"valor total em reais\"" +
+      "\n    }" +
+      "\n  ]," +
+      "\n  \"avisos\": [\"Observações relevantes, se houver\"]\n}" +
+      "\nSe um campo não estiver presente, retorne a string \"Não informado\".";
+
+  const user = {
+    role: "user",
+    content: `Documentos de cotação analisados:\n\n${sections.join("\n\n")}\n\nGere o JSON solicitado.`
+  };
+
+  try {
+    const resp = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [system, user],
+    });
+    const json = extractJsonSafe(resp?.choices?.[0]?.message?.content ?? "");
+    if (!json) return null;
+    const objeto = String(
+      json.objeto ?? json.objeto_cotacao ?? json.objetoDescricao ?? json.objeto_descricao ?? ""
+    ).trim();
+    const avisos = Array.isArray(json.avisos) ? json.avisos.map((a) => String(a)) : [];
+    const propostasRaw = Array.isArray(json.propostas) ? json.propostas : [];
+    const propostas = propostasRaw
+      .map((item, idx) => normalizeCotacaoProposta(item, idx))
+      .filter(Boolean)
+      .slice(0, 10);
+    return {
+      objeto: objeto || "Não informado",
+      propostas,
+      avisos,
+    };
+  } catch (err) {
+    console.warn("[LLM-cotacoes] falhou:", err?.message || err);
+    return null;
+  }
+}
+
 /* ================= LLM helpers ================= */
 // Tenta extrair JSON mesmo que venha cercado por ```json ... ```
 function extractJsonSafe(str) {
@@ -354,6 +503,7 @@ async function callLLMJson(messages) {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,
+      response_format: { type: "json_object" },
       messages,
     });
     const txt = r?.choices?.[0]?.message?.content ?? "";
@@ -382,7 +532,8 @@ function messagesForDocs({ nfText, oficioText, ordemText, cotText }) {
 }
 Regras:
 - "nf": apenas número curto (3–12 dígitos). Nunca a chave de 44 dígitos.
-- "dataTitulo": data de emissão da NF em YYYY-MM-DD.
+- "dataTitulo": data de emissão ou data de saída da nota fiscal (YYYY-MM-DD).
+- "just": transcreva somente o trecho do documento "Ofício de Solicitação" que fundamenta a compra.
 - Use vazio ("")/null quando não tiver certeza. Não invente.`
   };
   const user = {
@@ -469,7 +620,13 @@ router.post("/parse-docs", async (req, res, next) => {
       const nfText     = await fileToText(nfFile);
       const oficioText = await fileToText(oficioFile);
       const ordemText  = await fileToText(ordemFile);
-      const cotText    = (await Promise.all(cots.map(fileToText))).join("\n---\n");
+      const cotEntries = await Promise.all(
+        cots.map(async (file, idx) => ({
+          name: file?.originalname || `cotacao_${idx + 1}`,
+          text: await fileToText(file),
+        }))
+      );
+      const cotText    = cotEntries.map((c) => c.text || "").join("\n---\n");
 
       // heurísticas
       const localNF   = extractNF_local(nfText);
@@ -478,6 +635,13 @@ router.post("/parse-docs", async (req, res, next) => {
       // 3) LLM (opcional)
       const llmRaw = await callLLMJson(messagesForDocs({ nfText, oficioText, ordemText, cotText }));
       const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
+
+      let cotacoesAI = null;
+      try {
+        cotacoesAI = await analyzeCotacoesWithLLM(cotEntries);
+      } catch (err) {
+        console.warn("[parse-docs] analyzeCotacoesWithLLM falhou:", err?.message || err);
+      }
 
       // 4) Merge — NF
       let nfFinal = null;
@@ -492,12 +656,16 @@ router.post("/parse-docs", async (req, res, next) => {
 
       // 4) Merge — Data do título
   
-      const dataTituloISO =
-      nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
-      extractIssueFromTextNF(nfText || "") ||      // PDF/Imagem: Emissão → Saída
-    null;
+      let dataTituloISO =
+        nfFields.data_emissao_iso ||                 // XML: dhEmi/dEmi → dhSaiEnt/dSaiEnt
+        extractIssueFromTextNF(nfText || "");        // PDF/Imagem: Emissão → Saída
 
-     const dataTituloBR = toBRDate(dataTituloISO || "");
+      if (!dataTituloISO && llm?.dataTitulo) {
+        const fromLLM = toISO(llm.dataTitulo);
+        if (fromLLM) dataTituloISO = fromLLM;
+      }
+
+      const dataTituloBR = toBRDate(dataTituloISO || "");
 
       // 4) Merge — Justificativa
       let justFinal = (localJust || "").trim();
@@ -507,6 +675,7 @@ router.post("/parse-docs", async (req, res, next) => {
         nf: nfFinal || "",
         nf_num_9: nfFinal || null,
         nf_num_9_mask: nfMask,
+        nf_mask: nfMask || "",
         data_emissao_iso: dataTituloISO || "",
         dataTitulo: dataTituloBR || "",
         just: justFinal || "",
@@ -514,6 +683,14 @@ router.post("/parse-docs", async (req, res, next) => {
         cnpj: (llm?.cnpj || "").trim(),
         pcNumero: (llm?.pcNumero || "").trim(),
       };
+
+      if (cotacoesAI) {
+        merged.cotacoes_objeto = cotacoesAI.objeto || "Não informado";
+        merged.cotacoes_propostas = cotacoesAI.propostas || [];
+        if (cotacoesAI.avisos?.length) merged.cotacoes_avisos = cotacoesAI.avisos;
+        if (!merged.objeto && cotacoesAI.objeto) merged.objeto = cotacoesAI.objeto;
+        if (!merged.propostas?.length && cotacoesAI.propostas?.length) merged.propostas = cotacoesAI.propostas;
+      }
 
       // Fallback cruzado usando outros documentos se ainda faltou algo
       if (!merged.nf || !merged.data_emissao_iso) {
