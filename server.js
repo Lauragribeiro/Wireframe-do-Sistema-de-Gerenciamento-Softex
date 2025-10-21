@@ -337,6 +337,18 @@ function normalizeDocs(body = {}) {
     ordem: ordemVal,
     ordem_fornecimento: src.ordem_fornecimento ?? ordemVal,
     comprovante: src.comprovante ?? src.pagamento ?? null,
+    folhaAssinada: src.folhaAssinada ?? src.folha_assinada ?? body.folhaAssinada ?? null,
+    decisaoAssinada:
+      src.decisaoAssinada ??
+      src.decisao_assinada ??
+      src.mapaAssinado ??
+      src.mapa_assinado ??
+      src.justificativaAssinada ??
+      src.justificativa_assinada ??
+      body.decisaoAssinada ??
+      body.mapaAssinado ??
+      body.justificativaAssinada ??
+      null,
     cotacoes: Array.isArray(src.cotacoes)
       ? src.cotacoes
       : Array.isArray(body.cotacoes)
