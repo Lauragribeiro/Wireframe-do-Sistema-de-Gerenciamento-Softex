@@ -2829,6 +2829,7 @@ form.addEventListener("submit", async (e) => {
 
     // FOLHA
     if (folhaTrigger) {
+      if (folhaTrigger.dataset && folhaTrigger.dataset.docgenBound === "direct") return;
       e.preventDefault(); e.stopPropagation();
       const { payload, error } = buildPayloadFolha();
       if (error) { alert(error); return; }
@@ -2840,6 +2841,7 @@ form.addEventListener("submit", async (e) => {
 
     // MAPA
     if (mapaTrigger) {
+      if (mapaTrigger.dataset && mapaTrigger.dataset.docgenBound === "direct") return;
       e.preventDefault(); e.stopPropagation();
       const { payload, error } = buildPayloadMapa();
       if (error) { alert(error); return; }
@@ -2873,6 +2875,26 @@ form.addEventListener("submit", async (e) => {
     await postAndDownload("/api/generate/justificativa-dispensa", payload, filename,
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   };
+
+  function bindDocButton(selector, handler){
+    const btn = document.querySelector(selector);
+    if (!btn || typeof handler !== "function") return;
+    btn.dataset.docgenBound = "direct";
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        await handler();
+      } catch (err) {
+        console.error("[docfin] erro ao gerar documento", err);
+        alert("Não foi possível gerar o documento. Veja o console para detalhes.");
+      }
+    });
+  }
+
+  bindDocButton("#btn-folha", window.generateFolhaNow);
+  bindDocButton("#btn-mapa", window.generateMapaNow);
+  bindDocButton("#btn-just", window.generateJustificativaNow);
 
   document.addEventListener("keydown", (e)=>{
     if (e.altKey && (e.key === "f" || e.key === "F")) { e.preventDefault(); window.generateFolhaNow(); }
