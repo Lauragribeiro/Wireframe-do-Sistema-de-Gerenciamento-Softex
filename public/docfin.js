@@ -215,12 +215,50 @@ form.addEventListener("keydown", (e) => {
 });
 
 // 3) Se usa data-pick para abrir inputs de arquivo
+const pickerState = new WeakMap();
+function openHiddenFileInput(btn){
+  const sel = btn.getAttribute("data-pick");
+  if (!sel) return;
+  const input = $(sel);
+  if (!input) return;
+
+  if (pickerState.get(input)) return; // evita duplo clique / dialog duplicado
+  pickerState.set(input, true);
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    pickerState.delete(input);
+    input.removeEventListener("change", release);
+    input.removeEventListener("input", release);
+  };
+  input.addEventListener("change", release, { once: true });
+  input.addEventListener("input", release, { once: true });
+  setTimeout(release, 2000);
+
+  try {
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+      return;
+    }
+  } catch (err) {
+    console.warn("[docfin] showPicker falhou, usando fallback de clique:", err);
+  }
+
+  try {
+    input.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  } catch (err) {
+    input.click();
+  }
+}
+
 $$('[data-pick]').forEach((btn) => {
   btn.type = "button";
   btn.addEventListener("click", (ev) => {
     ev.preventDefault();
-    const sel = btn.getAttribute("data-pick");
-    $(sel)?.click();
+    ev.stopPropagation();
+    openHiddenFileInput(btn);
   });
 });
 
@@ -243,10 +281,12 @@ $$('[data-pick]').forEach((btn) => {
   const inJust    = $("#inputJust"); // opcional
 
   // Uploads (inputs reais do HTML)
-  const upNF       = $("#nfFileInput");
-  const upOficio   = $("#oficioFileInput");
-  const upOrdem    = $("#ordemFileInput");
-  const upCotacoes = $("#cotacoesInput");
+  const upNF            = $("#nfFileInput");
+  const upOficio        = $("#oficioFileInput");
+  const upOrdem         = $("#ordemFileInput");
+  const upCotacoes      = $("#cotacoesInput");
+  const upFolhaAssinada = $("#folhaAssinadaInput");
+  const upDecisaoAss    = $("#decisaoAssinadaInput");
 
   // Comprovante (dropzone/paste)
   const zonePay    = $("#pay-paste-zone");
@@ -302,7 +342,9 @@ $$('[data-pick]').forEach((btn) => {
     oficio: null,
     ordem: null,
     cotacoes: [],
-    comprovante: null
+    comprovante: null,
+    folhaAssinada: null,
+    decisaoAssinada: null
   };
 
   /* ================== CNPJ → Razão Social ================== */
@@ -357,12 +399,6 @@ $$('[data-pick]').forEach((btn) => {
       filename:    f.filename || f.key || ""
     };
   }
-
-  // Botões [data-pick] disparam o input correspondente
-  $$('[data-pick]').forEach(btn => {
-    const sel = btn.getAttribute('data-pick');
-    btn.addEventListener('click', () => $(sel)?.click());
-  });
 
   /* ================== PARSE IMEDIATO (envia o File para /api/parse-docs) ================== */
  async function parseDocsImmediate({ nf=null, oficio=null, ordem=null, cotacoes=[] } = {}) {
@@ -529,6 +565,8 @@ async function maybeAutoInsertRow(reason = "") {
       ordem: window.formDocs?.ordem || null,
       cotacoes: Array.isArray(window.formDocs?.cotacoes) ? [...window.formDocs.cotacoes] : [],
       comprovante: window.formDocs?.comprovante || null,
+      folhaAssinada: window.formDocs?.folhaAssinada || null,
+      decisaoAssinada: window.formDocs?.decisaoAssinada || null,
     },
   };
 
@@ -657,6 +695,8 @@ async function maybeAutoInsertRow(reason = "") {
   bindSingleUpload({ inputSel:"#nfFileInput",     linkSel:"#md-nf-link",     hintSel:"#hint-nf",     targetKey:"nf",     parseField:"nf"     });
   bindSingleUpload({ inputSel:"#oficioFileInput", linkSel:"#md-oficio-link", hintSel:"#hint-oficio", targetKey:"oficio", parseField:"oficio" });
   bindSingleUpload({ inputSel:"#ordemFileInput",  linkSel:"#md-ordem-link",  hintSel:null,           targetKey:"ordem",  parseField:"ordem"  });
+  bindSingleUpload({ inputSel:"#folhaAssinadaInput", linkSel:"#md-folha-ass-link", hintSel:"#hint-folha-ass", targetKey:"folhaAssinada", parseField:null });
+  bindSingleUpload({ inputSel:"#decisaoAssinadaInput", linkSel:"#md-decisao-ass-link", hintSel:null, targetKey:"decisaoAssinada", parseField:null });
   bindMultiUpload  ({ inputSel:"#cotacoesInput",  listSel:"#cotacoesList" });
 
   /* ================== Comprovante: paste/drag + extração ================== */
@@ -974,7 +1014,9 @@ function buildRowFromState() {
       oficio: formDocs.oficio || null,
       ordem: formDocs.ordem || null,
       cotacoes: Array.isArray(formDocs.cotacoes) ? [...formDocs.cotacoes] : [],
-      comprovante: formDocs.comprovante || null
+      comprovante: formDocs.comprovante || null,
+      folhaAssinada: formDocs.folhaAssinada || null,
+      decisaoAssinada: formDocs.decisaoAssinada || null,
     }
   };
 
@@ -1025,6 +1067,8 @@ function docBadge(row) {
   if (row.docs?.ordem) names.push("Ordem");
   if (Array.isArray(row.docs?.cotacoes) && row.docs.cotacoes.length) names.push(`${row.docs.cotacoes.length} cot.`);
   if (row.docs?.comprovante) names.push("Comprovante");
+  if (row.docs?.folhaAssinada) names.push("Folha assinada");
+  if (row.docs?.decisaoAssinada) names.push("Decisão assinada");
   if (!names.length) return `<span class="badge badge--neutral">sem anexos</span>`;
   return `<span class="badge badge--ok" title="${esc(names.join(", "))}">${names.join(" · ")}</span>`;
 }
@@ -1263,6 +1307,16 @@ function toggleButtons(tr, map) {
     if (docs.comprovante) {
       const href = docs.comprovante.url || docs.comprovante.link || "";
       const label = "Comprovante";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    if (docs.folhaAssinada) {
+      const href = docs.folhaAssinada.url || docs.folhaAssinada.link || "";
+      const label = "Folha de Rosto assinada";
+      links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
+    }
+    if (docs.decisaoAssinada) {
+      const href = docs.decisaoAssinada.url || docs.decisaoAssinada.link || "";
+      const label = "Mapa/Justificativa assinada";
       links.push(href ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label);
     }
     modalDocsArea.innerHTML = links.length ? links.join(" · ") : '<span class="muted">Sem documentos anexados.</span>';
@@ -1676,7 +1730,9 @@ form.addEventListener("submit", async (e) => {
         oficio: formDocs.oficio || null,
         ordem: formDocs.ordem || null,
         cotacoes: Array.isArray(formDocs.cotacoes) ? [...formDocs.cotacoes] : [],
-        comprovante: formDocs.comprovante || null
+        comprovante: formDocs.comprovante || null,
+        folhaAssinada: formDocs.folhaAssinada || null,
+        decisaoAssinada: formDocs.decisaoAssinada || null
       }
     };
 
@@ -1692,26 +1748,31 @@ form.addEventListener("submit", async (e) => {
     submitting = false;
   }
 });
-  function clearFormForNext() {
-    ["#inputDataPagamento","#inputNumeroExtrato","#inputValorPago","#inputMesAno","#inputJust"]
-      .forEach(sel => { const el = $(sel); if (el) el.value = ""; });
+  function clearFormForNext() {
+    ["#inputDataPagamento","#inputNumeroExtrato","#inputValorPago","#inputMesAno","#inputJust"]
+      .forEach((sel) => { const el = $(sel); if (el) el.value = ""; });
 
-    lastParsedDocs = {};
-    lastParsedPay  = null;
-    formDocs.nf = formDocs.oficio = formDocs.ordem = formDocs.comprovante = null;
-    formDocs.cotacoes = [];
+    lastParsedDocs = {};
+    lastParsedPay  = null;
+    formDocs.nf = formDocs.oficio = formDocs.ordem =
+      formDocs.comprovante = formDocs.folhaAssinada = formDocs.decisaoAssinada = null;
+    formDocs.cotacoes = [];
 
-    ["#md-nf-link","#md-oficio-link","#md-ordem-link"].forEach(sel=>{
-      const a=$(sel); if(a){ a.hidden=true; a.removeAttribute("href"); a.textContent=""; }
-    });
-    const ul = $("#cotacoesList"); if (ul) { ul.innerHTML=""; ul.hidden = true; }
+    ["#md-nf-link","#md-oficio-link","#md-ordem-link","#md-folha-ass-link","#md-decisao-ass-link"].forEach((sel) => {
+      const a = $(sel);
+      if (a) { a.hidden = true; a.removeAttribute("href"); a.textContent = ""; }
+    });
+    const hintFolha = $("#hint-folha-ass");
+    if (hintFolha) hintFolha.textContent = "";
+    const ul = $("#cotacoesList");
+    if (ul) { ul.innerHTML = ""; ul.hidden = true; }
 
-    [upNF, upOficio, upOrdem, upCotacoes, payFile].forEach(el => { if (el) el.value = ""; });
-    resetPreview(); setPayStatus("");
-    // Se quiser também limpar CNPJ e Razão:
-    // if (inCNPJ) inCNPJ.value = "";
-    // if (inRazao) inRazao.value = "";
-  }
+    [upNF, upOficio, upOrdem, upCotacoes, upFolhaAssinada, upDecisaoAss, payFile].forEach((el) => {
+      if (el) el.value = "";
+    });
+    resetPreview();
+    setPayStatus("");
+  }
 
   /* ================== Salvar tabela ================== */
   btnSave.addEventListener("click", async () => {
@@ -2031,7 +2092,9 @@ form.addEventListener("submit", async (e) => {
       name: S(c.name || c.filename || c.fileName || "cotacao.pdf"),
       text: S(c.text || ""),
       url:  S(c.url  || c.link || ""),
-      path: S(c.path || "")
+      path: S(c.path || ""),
+      filename: S(c.filename || c.key || (S(c.url || "").startsWith("/uploads/") ? S(c.url || "").split("/").pop() : "")),
+      originalname: S(c.originalname || c.name || c.fileName || "")
     }));
   }
 
@@ -2192,6 +2255,25 @@ form.addEventListener("submit", async (e) => {
 
     // Coleta anexos de cotação vistos na UI (coluna Documentação)
     const cotacoesSlim = pickCotacoesFromRow(row);
+    const cotacoesUploads = Array.isArray(row?.docs?.cotacoes) ? row.docs.cotacoes : [];
+    const cotacaoFileNames = cotacoesUploads
+      .map((entry) => {
+        const raw = S(entry?.filename || entry?.key || "") || S(entry?.url || "");
+        const cleaned = raw
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split("/")
+          .pop();
+        if (cleaned) return cleaned;
+        const fallback = S(entry?.name || entry?.originalname || "")
+          .split(/[\\/]/)
+          .pop()
+          .trim();
+        return fallback;
+      })
+      .map((name) => S(name).replace(/^\/+/, "").trim())
+      .filter(Boolean);
 
     // Propostas preenchidas manualmente (se houver na linha)
     let propostasEstr = Array.isArray(row?.propostas) ? clonePropostas(row.propostas) : [];
@@ -2285,6 +2367,7 @@ form.addEventListener("submit", async (e) => {
 
     // Sempre mande 'propostas' (mesmo vazia) para o loop do template
     payload.propostas = propostas;
+    if (cotacaoFileNames.length) payload.cotacoes = cotacaoFileNames;
     if (Array.isArray(row.cotacoes_avisos) && row.cotacoes_avisos.length) {
       payload.cotacoesAvisos = cloneAvisos(row.cotacoes_avisos);
     }
@@ -2297,11 +2380,78 @@ form.addEventListener("submit", async (e) => {
     return { payload };
   }
 
+  function buildPayloadJustificativa(){
+    const proj = window.currentProject || {};
+    const row  = getSelectedRowFromModal();
+    if (!row) return { error: "Abra/seleciona uma linha antes de gerar a justificativa." };
+
+    const natureza = getNaturezaDisp(row);
+    const justificativaBase = S(row.just || row.justificativa || "").trim();
+    if (!justificativaBase) {
+      return { error: "Informe a justificativa para compra antes de gerar o documento." };
+    }
+
+    const objetoDesc = normalizeObjeto(
+      row.objeto ||
+      row.cotacaoObjeto ||
+      row.cotacoes_objeto ||
+      row.objetoDescricao ||
+      lastParsedDocs?.cotacoes_objeto ||
+      ""
+    ) || "Não informado";
+
+    const dtPg = row.dataPagamento || "";
+    const baseDate = dtPg ? new Date(dtPg) : new Date();
+    const dia = String(baseDate.getDate()).padStart(2,"0");
+    const mes = String(baseDate.getMonth()+1).padStart(2,"0");
+    const ano = String(baseDate.getFullYear());
+
+    const payload = {
+      instituicao:   S(proj.instituicao || "EDGE"),
+      projeto:       S(proj.titulo),
+      codigoProjeto: S(proj.codigo),
+      termo:         S(proj.termoParceria),
+      tipoRubrica:   S(natureza),
+      rubrica:       S(natureza),
+      objeto:        objetoDesc,
+      justificativa: justificativaBase,
+      favorecido:    S(row.favorecido),
+      cnpjFav:       S(row.cnpj),
+      valor:         toBRL(row.valor),
+      dataPagamento: toBR(row.dataPagamento || ""),
+      localidade:    "Maceió",
+      dia, mes, ano,
+      coordenador:   S(proj.coordenador || ""),
+      filenameHint:  `JustificativaDispensa_${S(proj.codigo || "Projeto")}_${S(row.pcNumero || "")}` ,
+      processo: {
+        naturezaDisp:     S(natureza),
+        objeto:           objetoDesc,
+        favorecidoNome:   S(row.favorecido),
+        favorecidoDoc:    S(row.cnpj),
+        dataPagamentoISO: S(row.dataPagamento || ""),
+        justificativa:    justificativaBase,
+      },
+      proj: {
+        instituicao:   S(proj.instituicao || "EDGE"),
+        cnpj:          S(proj.cnpj),
+        termoParceria: S(proj.termoParceria),
+        projetoNome:   S(proj.titulo),
+        projetoCodigo: S(proj.codigo),
+      },
+      extras: { cidade: "Maceió" },
+      acao: "gerar_justificativa_dispensa",
+    };
+
+    return { payload };
+  }
+
   // ---------- click handlers ----------
   const FOLHA_SELECTORS = ["#btn-folha", "#btn-folha-rosto", "[data-action='folha']"];
   const MAPA_SELECTORS  = ["#btn-mapa", "#btnMapa", "[data-action='mapa']"];
+  const JUST_SELECTORS  = ["#btn-just", "#btnJust", "[data-action='justificativa']"];
   const FOLHA_TEXT_RX = /(gerar|baixar).*(folha|folha de rosto)/i;
   const MAPA_TEXT_RX  = /(gerar|baixar).*(mapa|cot(a|ã)cao)/i;
+  const JUST_TEXT_RX  = /(gerar|baixar).*(justificativa)/i;
 
   const ACTIONABLE_SEL = "button, a, [role='button']";
 
@@ -2325,6 +2475,350 @@ form.addEventListener("submit", async (e) => {
     const label = (actionable.textContent || "").trim();
     return rx.test(label) ? actionable : null;
   }
+
+  const btnZipEl     = document.querySelector("#btn-zip");
+  const zipModal     = document.querySelector("#zip-modal");
+  const zipOptionsEl = document.querySelector("#zip-options");
+  const zipForm      = document.querySelector("#zip-form");
+  const zipCancel    = document.querySelector("#zip-cancel");
+  const zipClose     = document.querySelector("#zip-close");
+  const zipConfirm   = document.querySelector("#zip-confirm");
+  const zipEmpty     = document.querySelector("#zip-empty");
+  const zipFeedback  = document.querySelector("#zip-feedback");
+
+  let zipOptionState = [];
+  let zipRowRef = null;
+
+  async function ensureJSZip(){
+    if (window.JSZip) return window.JSZip;
+    try {
+      const mod = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+      if (mod && (mod.default || mod.JSZip)) {
+        window.JSZip = mod.default || mod.JSZip;
+        return window.JSZip;
+      }
+    } catch (err) {
+      console.warn('[docfin] falha ao carregar JSZip dinamicamente:', err);
+    }
+    return window.JSZip || null;
+  }
+
+  function normalizeUploadEntry(entry){
+    if (!entry) return null;
+    if (typeof entry === 'string') {
+      const name = entry.split(/[\\/]/).pop() || 'documento';
+      return normalizeUploadEntry({ url: entry, originalname: name });
+    }
+    const obj = { ...entry };
+    let url = obj.url || obj.link || obj.href || '';
+    if (!url && obj.path) {
+      const rel = String(obj.path).replace(/^\/+/, '');
+      url = rel.startsWith('uploads/') ? `/${rel}` : `/uploads/${rel}`;
+    }
+    if (!url && obj.filename) {
+      url = `/uploads/${String(obj.filename).replace(/^\/+/, '')}`;
+    }
+    if (!url) return null;
+    const originalname = obj.originalname || obj.name || obj.filename || obj.fileName || 'documento';
+    const filename = obj.filename || obj.key || null;
+    return { url, originalname, filename };
+  }
+
+  function addUploadOption(list, fileEntry, label, id, order, fallbackName, description){
+    const normalized = normalizeUploadEntry(fileEntry);
+    if (!normalized) {
+      list.push({ id, label, kind: 'upload', order, disabled: true, reason: 'Arquivo não disponível.', desc: description || '' });
+      return;
+    }
+    const desc = description || normalized.originalname || fallbackName || label;
+    list.push({ id, label, kind: 'upload', order, file: normalized, desc, disabled: false });
+  }
+
+  function buildZipOptions(row){
+    const options = [];
+    const docs = row?.docs || {};
+    addUploadOption(options, docs.nf, 'Nota Fiscal / Recibo', 'upload-nf', 150, 'nf.pdf');
+    addUploadOption(options, docs.oficio, 'Ofício de Solicitação', 'upload-oficio', 160, 'oficio.pdf');
+    addUploadOption(options, docs.ordem, 'Ordem de fornecimento', 'upload-ordem', 170, 'ordem.pdf');
+    addUploadOption(options, docs.comprovante, 'Comprovante de Pagamento', 'upload-comprovante', 180, 'comprovante.pdf');
+    addUploadOption(options, docs.folhaAssinada, 'Folha de Rosto assinada', 'upload-folha-assinada', 190, 'folha_assinada.pdf');
+    addUploadOption(options, docs.decisaoAssinada, 'Mapa/Justificativa assinada', 'upload-decisao-assinada', 200, 'decisao_assinada.pdf');
+    if (Array.isArray(docs.cotacoes)) {
+      docs.cotacoes.forEach((entry, idx) => {
+        addUploadOption(options, entry, `Cotação ${idx + 1}`, `upload-cot-${idx + 1}`, 220 + idx, `cotacao_${idx + 1}.pdf`);
+      });
+    }
+
+    const folha = buildPayloadFolha();
+    options.push({
+      id: 'gen-folha',
+      label: 'Folha de Rosto (gerada)',
+      kind: 'generate',
+      order: 20,
+      payload: folha.payload || null,
+      endpoint: '/api/generate/folha-rosto',
+      filename: `${sanitize(folha.payload?.filenameHint, 'folha_de_rosto')}.docx`,
+      disabled: !!folha.error,
+      reason: folha.error || '',
+      desc: 'Gerar automaticamente a partir dos dados do processo.'
+    });
+    const mapa = buildPayloadMapa();
+    options.push({
+      id: 'gen-mapa',
+      label: 'Mapa de Cotação (gerado)',
+      kind: 'generate',
+      order: 30,
+      payload: mapa.payload || null,
+      endpoint: '/api/generate/mapa-cotacao',
+      filename: `${sanitize(mapa.payload?.filenameHint, 'mapa_cotacao')}.docx`,
+      disabled: !!mapa.error,
+      reason: mapa.error || '',
+      desc: 'Inclui os dados estruturados das cotações.'
+    });
+    const just = buildPayloadJustificativa();
+    options.push({
+      id: 'gen-justificativa',
+      label: 'Justificativa para Dispensa (gerada)',
+      kind: 'generate',
+      order: 40,
+      payload: just.payload || null,
+      endpoint: '/api/generate/justificativa-dispensa',
+      filename: `${sanitize(just.payload?.filenameHint, 'justificativa_dispensa')}.docx`,
+      disabled: !!just.error,
+      reason: just.error || '',
+      desc: 'Documento textual com a justificativa do processo.'
+    });
+
+    return options.sort((a, b) => (a.order || 0) - (b.order || 0));
+  }
+
+  function updateZipConfirmState(){
+    if (!zipConfirm || !zipOptionsEl) return;
+    const hasChecked = !!zipOptionsEl.querySelector('input[type="checkbox"]:checked');
+    zipConfirm.disabled = !hasChecked;
+  }
+
+  function resetZipModalState(){
+    zipOptionState = [];
+    zipRowRef = null;
+    if (zipOptionsEl) zipOptionsEl.innerHTML = '';
+    if (zipFeedback) zipFeedback.textContent = '';
+    if (zipConfirm) zipConfirm.disabled = true;
+    if (zipEmpty) zipEmpty.hidden = true;
+  }
+
+  function closeZipModal(){
+    if (!zipModal) return;
+    if (zipModal.open && zipModal.close) zipModal.close();
+    else zipModal.removeAttribute('open');
+    resetZipModalState();
+  }
+
+  function renderZipOptions(options){
+    if (!zipOptionsEl) return false;
+    zipOptionsEl.innerHTML = '';
+    let selectable = false;
+    options.forEach((opt, index) => {
+      const wrapper = document.createElement('label');
+      wrapper.className = 'zip-option';
+      if (opt.disabled) wrapper.classList.add('disabled');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = opt.id;
+      checkbox.disabled = !!opt.disabled;
+      if (!opt.disabled) {
+        checkbox.checked = true;
+        selectable = true;
+      }
+      const content = document.createElement('div');
+      content.className = 'zip-option-content';
+      const title = document.createElement('span');
+      title.className = 'zip-option-title';
+      title.textContent = opt.label || `Opção ${index + 1}`;
+      content.appendChild(title);
+      if (opt.desc) {
+        const desc = document.createElement('span');
+        desc.className = 'zip-option-desc';
+        desc.textContent = opt.desc;
+        content.appendChild(desc);
+      }
+      if (opt.disabled && opt.reason) {
+        const warn = document.createElement('span');
+        warn.className = 'zip-option-desc';
+        warn.textContent = opt.reason;
+        content.appendChild(warn);
+      }
+      wrapper.appendChild(checkbox);
+      wrapper.appendChild(content);
+      zipOptionsEl.appendChild(wrapper);
+    });
+    updateZipConfirmState();
+    return selectable;
+  }
+
+  function openZipModal(row){
+    if (!zipModal || !zipOptionsEl || !zipConfirm) {
+      alert('Modal de download indisponível no momento.');
+      return;
+    }
+    const options = buildZipOptions(row || {});
+    zipOptionState = options;
+    zipRowRef = row || null;
+    const hasSelectable = renderZipOptions(options);
+    if (zipEmpty) zipEmpty.hidden = options.length > 0;
+    if (zipFeedback) zipFeedback.textContent = options.length ? '' : 'Nenhum documento disponível.';
+    zipConfirm.disabled = !hasSelectable;
+    if (zipModal.showModal) zipModal.showModal();
+    else zipModal.setAttribute('open', '');
+  }
+
+  function sanitizeZipFilename(row){
+    const projCode = window.currentProject?.codigo || window.currentProject?.id || 'projeto';
+    const pc = row?.pcNumero || row?.id || row?.favorecido || 'documentos';
+    return `${sanitize(`Documentos_${projCode}_${pc}`, 'documentos')}.zip`;
+  }
+
+  async function handleZipSubmit(event){
+    event.preventDefault();
+    if (!zipOptionsEl || !zipConfirm || !zipFeedback) return;
+    const checked = Array.from(zipOptionsEl.querySelectorAll('input[type="checkbox"]:checked')).map((el) => el.value);
+    if (!checked.length) {
+      zipFeedback.textContent = 'Selecione ao menos um documento.';
+      zipConfirm.disabled = false;
+      return;
+    }
+    const jszipCtor = await ensureJSZip();
+    if (!jszipCtor) {
+      zipFeedback.textContent = 'Não foi possível carregar a biblioteca de compactação.';
+      return;
+    }
+    const row = zipRowRef || getSelectedRowFromModal();
+    if (!row) {
+      zipFeedback.textContent = 'Nenhum processo selecionado.';
+      return;
+    }
+    zipConfirm.disabled = true;
+    zipFeedback.textContent = 'Reunindo documentos...';
+    try {
+      const zip = new jszipCtor();
+      const usedNames = new Set();
+      const selected = zipOptionState.filter((opt) => checked.includes(opt.id) && !opt.disabled);
+      for (const opt of selected) {
+        if (opt.kind === 'upload') {
+          const file = opt.file;
+          if (!file || !file.url) throw new Error(`Arquivo indisponível para ${opt.label}`);
+          zipFeedback.textContent = `Baixando ${opt.label}...`;
+          const res = await fetch(file.url);
+          if (!res.ok) throw new Error(`${opt.label}: HTTP ${res.status}`);
+          const buffer = await res.arrayBuffer();
+          const base = sanitize(file.originalname || opt.label || 'documento', 'documento');
+          const name = uniqueZipName(base, usedNames);
+          zip.file(name, buffer);
+        } else if (opt.kind === 'generate') {
+          if (!opt.payload) throw new Error(opt.reason || `Dados insuficientes para ${opt.label}`);
+          zipFeedback.textContent = `Gerando ${opt.label}...`;
+          const res = await fetch(opt.endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(opt.payload),
+          });
+          if (!res.ok) {
+            const txt = await res.text().catch(() => '');
+            throw new Error(`${opt.label}: HTTP ${res.status} ${txt}`);
+          }
+          const buffer = await res.arrayBuffer();
+          const base = sanitize(opt.filename || `${opt.id}.docx`, opt.id || 'documento');
+          const name = uniqueZipName(base, usedNames);
+          zip.file(name, buffer);
+        }
+      }
+      zipFeedback.textContent = 'Compactando...';
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const zipName = sanitizeZipFilename(row);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = zipName;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        link.remove();
+      }, 0);
+      closeZipModal();
+    } catch (err) {
+      console.error('[docfin] erro ao montar ZIP:', err);
+      zipFeedback.textContent = `Erro ao gerar o ZIP: ${err?.message || err}`;
+      zipConfirm.disabled = false;
+    }
+  }
+
+  if (zipOptionsEl) {
+    zipOptionsEl.addEventListener('change', (event) => {
+      const target = event.target;
+      if (target && target.matches && target.matches('input[type="checkbox"]')) {
+        if (zipFeedback) zipFeedback.textContent = '';
+        updateZipConfirmState();
+      }
+    });
+  }
+
+  if (zipForm) {
+    zipForm.addEventListener('submit', handleZipSubmit);
+  }
+
+  if (zipCancel) {
+    zipCancel.addEventListener('click', (event) => {
+      event.preventDefault();
+      closeZipModal();
+    });
+  }
+
+  if (zipClose) {
+    zipClose.addEventListener('click', (event) => {
+      event.preventDefault();
+      closeZipModal();
+    });
+  }
+
+  if (zipModal) {
+    zipModal.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      closeZipModal();
+    });
+    zipModal.addEventListener('close', () => {
+      resetZipModalState();
+    });
+  }
+
+  if (btnZipEl) {
+    btnZipEl.addEventListener('click', (event) => {
+      event.preventDefault();
+      const row = getSelectedRowFromModal();
+      if (!row) {
+        alert('Selecione um processo de compra para baixar os documentos.');
+        return;
+      }
+      openZipModal(row);
+    });
+  }
+
+  function uniqueZipName(name, used){
+    const clean = name || 'documento';
+    if (!used.has(clean)) { used.add(clean); return clean; }
+    const idx = clean.lastIndexOf('.');
+    const base = idx > 0 ? clean.slice(0, idx) : clean;
+    const ext = idx > 0 ? clean.slice(idx) : '';
+    let counter = 2;
+    let candidate = `${base}_${counter}${ext}`;
+    while (used.has(candidate)) {
+      counter += 1;
+      candidate = `${base}_${counter}${ext}`;
+    }
+    used.add(candidate);
+    return candidate;
+  }
+
+
 
   document.addEventListener("click", async (e) => {
     const el = e.target;
@@ -2372,15 +2866,25 @@ form.addEventListener("submit", async (e) => {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   };
 
+  window.generateJustificativaNow = async function(){
+    const { payload, error } = buildPayloadJustificativa();
+    if (error) { alert(error); return; }
+    const filename = `${sanitize(payload.filenameHint, "justificativa_dispensa")}.docx`;
+    await postAndDownload("/api/generate/justificativa-dispensa", payload, filename,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  };
+
   document.addEventListener("keydown", (e)=>{
     if (e.altKey && (e.key === "f" || e.key === "F")) { e.preventDefault(); window.generateFolhaNow(); }
     if (e.altKey && (e.key === "m" || e.key === "M")) { e.preventDefault(); window.generateMapaNow(); }
+    if (e.altKey && (e.key === "j" || e.key === "J")) { e.preventDefault(); window.generateJustificativaNow(); }
   });
 
   window.addEventListener("load", () => {
     const folhaFound = !!document.querySelector(FOLHA_SELECTORS.join(", "));
     const mapaFound  = !!document.querySelector(MAPA_SELECTORS.join(", "));
-    console.log("[docfin] botões encontrados:", { folhaFound, mapaFound, FOLHA_SELECTORS, MAPA_SELECTORS });
+    const justFound  = !!document.querySelector(JUST_SELECTORS.join(", "));
+    console.log("[docfin] botões encontrados:", { folhaFound, mapaFound, justFound, FOLHA_SELECTORS, MAPA_SELECTORS, JUST_SELECTORS });
   });
 
   console.log("[docfin] bloco de ações carregado.");

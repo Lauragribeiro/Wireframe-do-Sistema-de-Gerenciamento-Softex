@@ -1,5 +1,5 @@
 // server.js — ESM (entrypoint único)
-import "dotenv/config";
+import "./src/envLoader.js";
 import express, { Router } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -337,6 +337,18 @@ function normalizeDocs(body = {}) {
     ordem: ordemVal,
     ordem_fornecimento: src.ordem_fornecimento ?? ordemVal,
     comprovante: src.comprovante ?? src.pagamento ?? null,
+    folhaAssinada: src.folhaAssinada ?? src.folha_assinada ?? body.folhaAssinada ?? null,
+    decisaoAssinada:
+      src.decisaoAssinada ??
+      src.decisao_assinada ??
+      src.mapaAssinado ??
+      src.mapa_assinado ??
+      src.justificativaAssinada ??
+      src.justificativa_assinada ??
+      body.decisaoAssinada ??
+      body.mapaAssinado ??
+      body.justificativaAssinada ??
+      null,
     cotacoes: Array.isArray(src.cotacoes)
       ? src.cotacoes
       : Array.isArray(body.cotacoes)
@@ -950,6 +962,18 @@ async function ensureCotacoesText(cotacoes = []) {
       if (!buf && c && typeof c === "object" && c?.path && fs.existsSync(c.path)) {
         try { buf = fs.readFileSync(c.path); } catch {}
       }
+      if (!buf && c && typeof c === "object" && c?.filename) {
+        const clean = String(c.filename)
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split(/[\\/]/)
+          .pop();
+        if (clean) {
+          const p = join(process.cwd(), "data", "uploads", clean);
+          if (fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
+        }
+      }
       if (!buf && url) {
         try {
           const base = `http://localhost:${process.env.PORT || 3000}`;
@@ -962,8 +986,14 @@ async function ensureCotacoesText(cotacoes = []) {
         } catch {}
       }
       if (!buf && typeof c === "string") {
-        const p = join(process.cwd(), "data", "uploads", c);
-        if (fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
+        const clean = String(c)
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split(/[\\/]/)
+          .pop();
+        const p = clean ? join(process.cwd(), "data", "uploads", clean) : null;
+        if (p && fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
       }
       if (buf) text = await pdfToTextFromBuffer(buf);
     }
