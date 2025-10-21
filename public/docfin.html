@@ -256,7 +256,9 @@
 
         <label class="field">
           <span>Tipo de rubrica</span>
-          <input id="md-rubrica" type="text" readonly />
+          <select id="md-rubrica" disabled>
+            <option value="">Selecione</option>
+          </select>
         </label>
         <label class="field">
           <span>Mês/Ano</span>
@@ -267,6 +269,19 @@
           <span>Justificativa para compra</span>
           <textarea id="md-just" rows="3" readonly></textarea>
         </label>
+      </div>
+
+      <div class="divider"></div>
+
+      <section>
+        <h3 class="block-subtitle">Documentação enviada</h3>
+        <div id="md-docs" class="muted tiny">Sem documentos anexados.</div>
+      </section>
+
+      <div class="modal__actions row" style="gap:12px;align-items:center;justify-content:flex-start;">
+        <button type="button" class="btn btn-outline" id="pc-edit-details">Editar detalhamento</button>
+        <button type="button" class="btn btn-primary" id="pc-save-details" hidden>Salvar detalhamento</button>
+        <span id="pc-edit-feedback" class="tiny muted" role="status" aria-live="polite"></span>
       </div>
 
       <div class="divider"></div>

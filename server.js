@@ -894,6 +894,53 @@ async function ensureCotacoesText(cotacoes = []) {
   }
   return out;
 }
+
+async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotacoes = [] } = {}) {
+  if (!hasOpenAI || !OpenAI) return { objeto: "", propostas: [] };
+  try {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const blocks = (cotacoes || [])
+      .map((c, idx) => {
+        const name = c?.name || c?.filename || c?.fileName || `Cotacao_${idx + 1}`;
+        const text = String(c?.text || "").slice(0, 20000);
+        return `### COTAÇÃO ${idx + 1} (${name})\n${text}`;
+      })
+      .filter(Boolean);
+
+    if (!blocks.length) return { objeto: "", propostas: [] };
+
+    const prompt = `Instituição: ${instituicao || ""}\nRubrica: ${rubrica || ""}\n\nAnalise as cotações a seguir e retorne um JSON com os campos {\n  "objeto": string,\n  "propostas": [ {\"selecao\", \"ofertante\", \"cnpj\", \"dataCotacao\", \"valor\"} ]\n}.\n\n${blocks.join("\n\n")}`;
+
+    const resp = await client.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: "Você extrai dados estruturados de cotações comerciais e responde em JSON válido." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+    });
+
+    const raw = resp.output_text || "{}";
+    let data;
+    try { data = JSON.parse(raw); } catch { data = {}; }
+
+    const objeto = typeof data.objeto === "string" ? data.objeto.trim() : "";
+    const propostas = Array.isArray(data.propostas)
+      ? data.propostas.map((p, idx) => ({
+          selecao: p.selecao || `Cotação ${idx + 1}`,
+          ofertante: p.ofertante || "",
+          cnpj_ofertante: p.cnpj_ofertante || p.cnpj || "",
+          data_cotacao: fmtBRDate(p.dataCotacao || p.data_cotacao || p.data || ""),
+          valor: fmtBRL(p.valor || p.valorBR || ""),
+        }))
+      : [];
+
+    return { objeto, propostas };
+  } catch (err) {
+    console.warn("[mapa] extractFromCotacoesWithAI falhou:", err?.message || err);
+    return { objeto: "", propostas: [] };
+  }
+}
 function guessFieldsFromText(txt = "") {
   const text = String(txt || "");
   const rxCNPJ = /\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/;
