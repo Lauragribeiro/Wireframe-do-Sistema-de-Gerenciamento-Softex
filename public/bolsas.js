@@ -1,6 +1,87 @@
-'use strict';
+const defaultNow = () => new Date();
+const defaultIdFactory = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-document.addEventListener('DOMContentLoaded', () => {
+export const resolveStoredBolsistas = ({ previous = [], stored = null, projectId = '' } = {}) => {
+  const prevList = Array.isArray(previous) ? [...previous] : [];
+  if (!projectId) {
+    return { list: prevList, shouldPersist: false };
+  }
+
+  if (Array.isArray(stored) && stored.length > 0) {
+    return { list: stored, shouldPersist: false };
+  }
+
+  if (prevList.length > 0) {
+    return { list: prevList, shouldPersist: true };
+  }
+
+  return { list: Array.isArray(stored) ? [...stored] : [], shouldPersist: false };
+};
+
+export const buildTermoData = (upload, fallback = null, now = defaultNow) => {
+  if (upload) {
+    const stamp = now();
+    const iso = stamp.toISOString();
+    return {
+      fileName: upload.fileName,
+      vigenciaRaw: upload.parsed?.vigenciaRaw || '',
+      vigenciaISO: upload.parsed?.vigenciaISO || null,
+      valorMaximoRaw: upload.parsed?.valorMaximoRaw || '',
+      valorMaximo: upload.parsed?.valorMaximo ?? null,
+      parsedAt: iso,
+    };
+  }
+
+  if (fallback) {
+    return { ...fallback };
+  }
+
+  return null;
+};
+
+export const buildBolsistaRecord = ({
+  editingId = null,
+  nome,
+  cpfDigits,
+  funcao,
+  valorNum,
+  termoUpload = null,
+  fallbackTermo = null,
+  now = defaultNow,
+  idFactory = defaultIdFactory,
+} = {}) => {
+  const stamp = now();
+  const iso = stamp.toISOString();
+  const termo = buildTermoData(termoUpload, fallbackTermo, () => stamp);
+  return {
+    id: editingId || idFactory(),
+    nome,
+    cpf: cpfDigits,
+    funcao,
+    valor: valorNum,
+    termo,
+    atualizadoEm: iso,
+  };
+};
+
+export const upsertBolsistas = (bolsistas = [], record, editingId = null) => {
+  const list = Array.isArray(bolsistas) ? [...bolsistas] : [];
+  if (!record) return list;
+
+  if (editingId != null) {
+    const idx = list.findIndex((item) => String(item.id) === String(editingId));
+    if (idx >= 0) {
+      list[idx] = record;
+      return list;
+    }
+  }
+
+  list.push(record);
+  return list;
+};
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -345,15 +426,30 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const loadLocal = () => {
-    bolsistas = [];
-    if (!projectId) return;
-    try {
-      const raw = localStorage.getItem(storageKey());
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) bolsistas = parsed;
-    } catch (err) {
-      console.warn('Não foi possível carregar os bolsistas armazenados.', err);
+    const previous = Array.isArray(bolsistas) ? bolsistas : [];
+    let storedList = null;
+
+    if (projectId) {
+      try {
+        const raw = localStorage.getItem(storageKey());
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) storedList = parsed;
+        }
+      } catch (err) {
+        console.warn('Não foi possível carregar os bolsistas armazenados.', err);
+      }
+    }
+
+    const { list, shouldPersist } = resolveStoredBolsistas({
+      previous,
+      stored: storedList,
+      projectId,
+    });
+
+    bolsistas = list;
+    if (shouldPersist) {
+      saveLocal();
     }
   };
 
@@ -564,46 +660,28 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let termoData = null;
-    if (termoUpload) {
-      termoData = {
-        fileName: termoUpload.fileName,
-        vigenciaRaw: termoUpload.parsed?.vigenciaRaw || '',
-        vigenciaISO: termoUpload.parsed?.vigenciaISO || null,
-        valorMaximoRaw: termoUpload.parsed?.valorMaximoRaw || '',
-        valorMaximo: termoUpload.parsed?.valorMaximo ?? null,
-        parsedAt: new Date().toISOString(),
-      };
-    }
-
-    if (!editingId && !termoData) {
+    if (!editingId && !termoUpload) {
       setFormFeedback('Faça upload do Termo de Outorga em PDF para concluir o cadastro.', 'error');
       termoInput?.focus();
       return;
     }
 
-    if (editingId && !termoData) {
-      const existing = bolsistas.find((item) => String(item.id) === String(editingId));
-      termoData = existing?.termo || null;
-    }
+    const existing = editingId
+      ? bolsistas.find((item) => String(item.id) === String(editingId))
+      : null;
 
-    const record = {
-      id: editingId || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    const record = buildBolsistaRecord({
+      editingId,
       nome,
-      cpf: cpfDigits,
+      cpfDigits,
       funcao,
-      valor: valorNum,
-      termo: termoData,
-      atualizadoEm: new Date().toISOString(),
-    };
+      valorNum,
+      termoUpload,
+      fallbackTermo: existing?.termo || null,
+    });
 
-    if (editingId) {
-      bolsistas = bolsistas.map((item) => (String(item.id) === String(editingId) ? record : item));
-      setFormFeedback('Bolsista atualizado com sucesso.', 'success');
-    } else {
-      bolsistas.push(record);
-      setFormFeedback('Bolsista cadastrado com sucesso.', 'success');
-    }
+    bolsistas = upsertBolsistas(bolsistas, record, editingId);
+    setFormFeedback(editingId ? 'Bolsista atualizado com sucesso.' : 'Bolsista cadastrado com sucesso.', 'success');
 
     termoUpload = null;
     saveLocal();
@@ -683,3 +761,4 @@ document.addEventListener('DOMContentLoaded', () => {
   wireTableClicks();
   loadProject();
 });
+}
