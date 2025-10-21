@@ -7,7 +7,7 @@ import fileUpload from "express-fileupload";
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import PizZip from "pizzip";
@@ -19,7 +19,7 @@ dayjs.locale("pt-br");
 
 // Routers externos (mantidos; adiciono fallbacks mais abaixo)
 import uploadsRouter                   from "./src/uploads.js";
-import parseDocsRouter                 from "./src/parseDocs.js";
+import parseDocsRouter, { extractPurchaseDocData } from "./src/parseDocs.js";
 import vendorsRouter                   from "./src/vendors.js";
 // import purchasesRouter               from "./src/purchases.js"; // ⇐ NÃO usar (router interno abaixo)
 import generateDocsRouter, { registerDocRoutes } from "./src/generateDocs.js";
@@ -101,7 +101,7 @@ purchasesRouter.get("/purchases", async (req, res) => {
       ? list.filter((x) => String(x?.projectId ?? "") === qProject)
       : list;
 
-    const data = dataRaw.map((row) => presentPurchaseRow(row));
+    const data = await Promise.all(dataRaw.map((row) => presentPurchaseRow(row)));
 
     return res.json({ ok: true, data });
   } catch (e) {
@@ -120,7 +120,7 @@ purchasesRouter.post("/purchases", async (req, res) => {
       req.query?.projectId ??
       "";
 
-    const incoming = normalizePurchaseInput(req.body || {}, fallbackProject);
+    const incoming = await normalizePurchaseInput(req.body || {}, fallbackProject);
     let list = await readPurchases();
     if (!Array.isArray(list)) list = [];
 
@@ -138,7 +138,7 @@ purchasesRouter.post("/purchases", async (req, res) => {
     }
 
     await writePurchases(list);
-    return res.json({ ok: true, data: presentPurchaseRow(stored) });
+    return res.json({ ok: true, data: await presentPurchaseRow(stored) });
   } catch (e) {
     console.error("[purchases] POST erro:", e);
     return res.status(200).json({ ok: false, error: String(e?.message || e) });
@@ -164,14 +164,14 @@ purchasesRouter.put("/purchases", async (req, res) => {
     // remove entradas anteriores do mesmo projeto
     list = list.filter((item) => String(item?.projectId ?? "") !== projectId);
 
-    const sanitized = rows.map((row) =>
-      normalizePurchaseInput(row || {}, projectId, { assignId: true })
+    const sanitized = await Promise.all(
+      rows.map((row) => normalizePurchaseInput(row || {}, projectId, { assignId: true }))
     );
 
     list.push(...sanitized);
     await writePurchases(list);
 
-    const response = sanitized.map((row) => presentPurchaseRow(row));
+    const response = await Promise.all(sanitized.map((row) => presentPurchaseRow(row)));
 
     return res.json({ ok: true, data: response });
   } catch (e) {
@@ -285,6 +285,57 @@ function normalizeDocs(body = {}) {
   return docs;
 }
 
+const MIME_BY_EXT = {
+  ".pdf": "application/pdf",
+  ".xml": "application/xml",
+  ".txt": "text/plain",
+  ".ofx": "application/x-ofx",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+};
+
+function guessMimeFromPath(filePath = "") {
+  const ext = extname(String(filePath || "")).toLowerCase();
+  return MIME_BY_EXT[ext] || "application/octet-stream";
+}
+
+async function loadDocFile(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  if (entry.buffer && entry.buffer.length) return entry;
+  const filePath =
+    entry.path || entry.filepath || entry.fullpath || entry.tempFilePath || entry.dest || entry.destination;
+  if (!filePath) return null;
+  try {
+    const buffer = await fsp.readFile(filePath);
+    const mimetype = entry.mimetype || guessMimeFromPath(filePath);
+    const originalname = entry.originalname || entry.name || entry.filename || filePath.split(/[/\\]/).pop();
+    return { ...entry, buffer, mimetype, originalname };
+  } catch (err) {
+    console.warn("[purchases] falha ao ler arquivo de doc:", filePath, err?.message || err);
+    return null;
+  }
+}
+
+async function extractDocsMetadata(docs) {
+  if (!docs || typeof docs !== "object") return null;
+  const nfFile = await loadDocFile(docs.nf);
+  const oficioFile = await loadDocFile(docs.oficio);
+  const ordemFile = await loadDocFile(docs.ordem || docs.ordem_fornecimento);
+  const cotacoes = Array.isArray(docs.cotacoes)
+    ? (await Promise.all(docs.cotacoes.map(loadDocFile))).filter(Boolean)
+    : [];
+
+  if (!nfFile && !oficioFile && !ordemFile && !cotacoes.length) return null;
+
+  try {
+    return await extractPurchaseDocData({ nfFile, oficioFile, ordemFile, cotacoes });
+  } catch (err) {
+    console.warn("[purchases] falha ao extrair metadados dos documentos:", err?.message || err);
+    return null;
+  }
+}
+
 function buildMesLabel(rawLabel, isoFromPayment = "") {
   const base = toStringSafe(rawLabel);
   if (base) {
@@ -314,20 +365,20 @@ function labelToMesAno(label = "") {
   return txt;
 }
 
-function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
+async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
   const assignId = opts.assignId ?? true;
 
   const idRaw = body.id ?? body.ID ?? body._id;
   const projectRaw =
     body.projectId ?? body.projetoId ?? body.projId ?? fallbackProjectId ?? "";
 
-  const dataTitulo = normalizeDate(
+  let dataTitulo = normalizeDate(
     body.dataTitulo ?? body.data_titulo ?? body.data_titulo_nf ?? body.data_emissao_iso
   );
-  const nf = toStringSafe(
+  let nf = toStringSafe(
     body.nf ?? body.nf_recibo ?? body.nfNumero ?? body.numeroNf ?? body.recibo ?? body.nf_num_9_mask ?? body.nf_num_9
   );
-  const just = toStringSafe(
+  let just = toStringSafe(
     body.just ?? body.justificativa ?? body.justificativaCompra ?? body.justificativa_para_compra
   );
   const nExtrato = toStringSafe(
@@ -373,15 +424,64 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
   }
   if (projectRaw) out.projectId = String(projectRaw);
 
+  if ((!dataTitulo || !nf || !just) && docs && typeof docs === "object") {
+    const meta = await extractDocsMetadata(docs);
+    if (meta) {
+      if (!dataTitulo) {
+        const iso = normalizeDate(meta.data_emissao_iso ?? meta.dataTitulo);
+        if (iso) {
+          dataTitulo = iso;
+          out.dataTitulo = iso;
+        }
+      }
+      if (!nf) {
+        const nfCandidate =
+          meta.nf_num_9_mask ??
+          meta.nf_num_9 ??
+          meta.nf_num ??
+          meta.nf_num_mask ??
+          meta.nf ??
+          "";
+        const nfVal = toStringSafe(nfCandidate);
+        if (nfVal) {
+          nf = nfVal;
+          out.nf = nfVal;
+        }
+      }
+      if (!just) {
+        const justVal = toStringSafe(meta.just);
+        if (justVal) {
+          just = justVal;
+          out.just = justVal;
+        }
+      }
+    }
+  }
+
   // aliases para compatibilidade
   out.dataTitulo = dataTitulo;
   out.data_titulo = dataTitulo;
+  out.data_emissao_iso = out.data_emissao_iso ?? dataTitulo;
+  out.data_emissao = out.data_emissao ?? dataTitulo;
+  out.nf = nf;
   out.nf_recibo = nf;
-  out.nf_num = out.nf_num ?? nf;
-  out.nf_num_mask = out.nf_num_mask ?? nf;
-  out.nf_num_9 = out.nf_num_9 ?? nf;
-  out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
+  const nfDigits = nf.replace(/\D+/g, "");
+  if (nfDigits) {
+    const nine = nfDigits.padStart(9, "0").slice(-9);
+    const mask = `${nine.slice(0, 3)}.${nine.slice(3, 6)}.${nine.slice(6)}`;
+    out.nf_num = out.nf_num ?? nine;
+    out.nf_num_mask = out.nf_num_mask ?? mask;
+    out.nf_num_9 = out.nf_num_9 ?? nine;
+    out.nf_num_9_mask = out.nf_num_9_mask ?? mask;
+  } else {
+    out.nf_num = out.nf_num ?? nf;
+    out.nf_num_mask = out.nf_num_mask ?? nf;
+    out.nf_num_9 = out.nf_num_9 ?? nf;
+    out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
+  }
+  out.just = just;
   out.justificativa = just;
+  out.justificativa_para_compra = out.justificativa_para_compra ?? just;
   out.numero_extrato = nExtrato;
   out.data_pagamento = dataPagamento;
   out.valor_pago = valor;
@@ -400,6 +500,7 @@ function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = {}) {
   out.mesLabel = mesLabel;
   out.mesAno = mesAno;
   out.mes_ano = mesAno;
+  out.docs = docs;
 
   return out;
 }
@@ -425,8 +526,8 @@ function mergeDefined(prev = {}, incoming = {}) {
   return out;
 }
 
-function presentPurchaseRow(row = {}) {
-  const normalized = normalizePurchaseInput(row, row.projectId ?? row.projetoId ?? "", {
+async function presentPurchaseRow(row = {}) {
+  const normalized = await normalizePurchaseInput(row, row.projectId ?? row.projetoId ?? "", {
     assignId: false,
   });
   // valores normalizados devem sobrescrever para garantir campos exigidos
