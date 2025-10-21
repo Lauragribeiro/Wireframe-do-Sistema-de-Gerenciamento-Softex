@@ -2303,21 +2303,38 @@ form.addEventListener("submit", async (e) => {
   const FOLHA_TEXT_RX = /(gerar|baixar).*(folha|folha de rosto)/i;
   const MAPA_TEXT_RX  = /(gerar|baixar).*(mapa|cot(a|ã)cao)/i;
 
+  const ACTIONABLE_SEL = "button, a, [role='button']";
+
   function matchesAny(el, selectors){
-    try { return selectors.some(sel => el.closest(sel)); }
-    catch { return false; }
+    if (!el) return null;
+    try {
+      for (const sel of selectors) {
+        const match = el.closest(sel);
+        if (match) return match;
+      }
+    } catch (err) {
+      console.error("[docfin] Erro ao procurar ação:", err);
+    }
+    return null;
   }
-  function isTextLike(el, rx){
-    const t = (el.textContent || "").trim();
-    return rx.test(t);
+
+  function matchByText(el, rx){
+    if (!el) return null;
+    const actionable = el.closest(ACTIONABLE_SEL);
+    if (!actionable) return null;
+    const label = (actionable.textContent || "").trim();
+    return rx.test(label) ? actionable : null;
   }
 
   document.addEventListener("click", async (e) => {
     const el = e.target;
     if (!el) return;
 
+    const folhaTrigger = matchesAny(el, FOLHA_SELECTORS) || matchByText(el, FOLHA_TEXT_RX);
+    const mapaTrigger  = !folhaTrigger && (matchesAny(el, MAPA_SELECTORS) || matchByText(el, MAPA_TEXT_RX));
+
     // FOLHA
-    if (matchesAny(el, FOLHA_SELECTORS) || isTextLike(el.closest("button, a, [role='button']") || el, FOLHA_TEXT_RX)) {
+    if (folhaTrigger) {
       e.preventDefault(); e.stopPropagation();
       const { payload, error } = buildPayloadFolha();
       if (error) { alert(error); return; }
@@ -2328,7 +2345,7 @@ form.addEventListener("submit", async (e) => {
     }
 
     // MAPA
-    if (matchesAny(el, MAPA_SELECTORS) || isTextLike(el.closest("button, a, [role='button']") || el, MAPA_TEXT_RX)) {
+    if (mapaTrigger) {
       e.preventDefault(); e.stopPropagation();
       const { payload, error } = buildPayloadMapa();
       if (error) { alert(error); return; }
