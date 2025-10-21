@@ -20,6 +20,7 @@ const __dirnameLocal = path.resolve();
 
 const TPL_FOLHA_DIR = path.join(__dirnameLocal, "src", "templates", "folha_rosto");
 const TPL_MAPA_DIR  = path.join(__dirnameLocal, "src", "templates", "mapa");
+const TPL_JUST_DIR  = path.join(__dirnameLocal, "src", "templates", "dispensa");
 
 function normalizeInst(raw) {
   const s = String(raw || "").toLowerCase();
@@ -92,12 +93,111 @@ function renderDocx(templatePath, dataObj) {
   }
 }
 
+const RUN_PREFIX = '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:color w:val="4472C4" w:themeColor="accent5"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">';
+const RUN_SUFFIX = '</w:t></w:r>';
+const RUN_BREAK  = '<w:r><w:br/></w:r>';
+const MONTH_NAMES_FULL = [
+  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
+];
+
+function escapeXml(value = "") {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildRuns(text) {
+  const raw = text == null ? "" : String(text);
+  if (!raw) return "";
+  const parts = raw.split(/\r?\n/);
+  return parts.map((part, index) => {
+    const safe = escapeXml(part === "" ? " " : part);
+    const run = `${RUN_PREFIX}${safe}${RUN_SUFFIX}`;
+    return index < parts.length - 1 ? `${run}${RUN_BREAK}` : run;
+  }).join("");
+}
+
+function setTableValue(xml, label, value, { fallback = "—" } = {}) {
+  const marker = `>${label}</w:t>`;
+  const idx = xml.indexOf(marker);
+  if (idx === -1) return xml;
+  const cellStart = xml.indexOf('<w:tc', idx + marker.length);
+  if (cellStart === -1) return xml;
+  const paraStart = xml.indexOf('<w:p', cellStart);
+  const paraEnd = paraStart === -1 ? -1 : xml.indexOf('</w:p>', paraStart);
+  if (paraStart === -1 || paraEnd === -1) return xml;
+  const afterPPr = xml.indexOf('</w:pPr>', paraStart);
+  if (afterPPr === -1 || afterPPr > paraEnd) return xml;
+  const insertPos = afterPPr + '</w:pPr>'.length;
+  const content = value == null || value === "" ? fallback : value;
+  const runs = buildRuns(content);
+  if (!runs) return xml;
+  const prefix = xml.slice(0, insertPos);
+  const suffix = xml.slice(paraEnd);
+  return `${prefix}${runs}${suffix}`;
+}
+
+function setParagraphAfterHeading(xml, heading, value, { fallback = "—" } = {}) {
+  const marker = `>${heading}</w:t>`;
+  const headingIdx = xml.indexOf(marker);
+  if (headingIdx === -1) return xml;
+  const headingEnd = xml.indexOf('</w:p>', headingIdx);
+  if (headingEnd === -1) return xml;
+  const paraStart = xml.indexOf('<w:p', headingEnd);
+  const paraEnd = paraStart === -1 ? -1 : xml.indexOf('</w:p>', paraStart);
+  if (paraStart === -1 || paraEnd === -1) return xml;
+  const afterPPr = xml.indexOf('</w:pPr>', paraStart);
+  if (afterPPr === -1 || afterPPr > paraEnd) return xml;
+  const insertPos = afterPPr + '</w:pPr>'.length;
+  const content = value == null || value === "" ? fallback : value;
+  const runs = buildRuns(content);
+  if (!runs) return xml;
+  const prefix = xml.slice(0, insertPos);
+  const suffix = xml.slice(paraEnd);
+  return `${prefix}${runs}${suffix}`;
+}
+
+function parseBrDateToIso(brDate = "") {
+  const parts = String(brDate || "").split("/");
+  if (parts.length !== 3) return "";
+  const [dd, mm, yyyy] = parts;
+  if (!dd || !mm || !yyyy) return "";
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+function buildDateExtenso(localidade = "", iso = "", dia = "", mes = "", ano = "") {
+  const city = String(localidade || "").trim();
+  const isoCandidate = iso || parseBrDateToIso(`${dia}/${mes}/${ano}`);
+  if (isoCandidate) {
+    const m = dayjs(isoCandidate);
+    if (m.isValid()) {
+      const prefix = city ? `${city}, ` : "";
+      return `${prefix}${m.format('DD [de] MMMM [de] YYYY')}`;
+    }
+  }
+  const dd = String(dia || "").padStart(2, "0");
+  const mesNum = Number(mes) || 0;
+  const monthName = MONTH_NAMES_FULL[mesNum - 1] || (mes ? String(mes) : "—");
+  const year = ano || "—";
+  const prefix = city ? `${city}, ` : "";
+  const dayPart = dd.trim() ? dd : "—";
+  return `${prefix}${dayPart} de ${monthName} de ${year}`;
+}
+
 /* ============== Helpers (únicas) para ler PDFs e extrair campos ============== */
 
 // Lê texto de /data/uploads/<fileName>
 async function readPdfTextFromUploads(fileName) {
   try {
-    const full = path.join(__dirnameLocal, "data", "uploads", String(fileName));
+    const raw = String(fileName || "").trim();
+    if (!raw) return "";
+    const clean = path.basename(raw.replace(/\\/g, "/"));
+    if (!clean) return "";
+    const full = path.join(__dirnameLocal, "data", "uploads", clean);
     if (!fs.existsSync(full)) return "";
     const buf = fs.readFileSync(full);
     const pdfParse = (await import("pdf-parse")).default; // import dinâmico (ESM-friendly)
@@ -415,6 +515,91 @@ router.post("/mapa-cotacao", async (req, res) => {
   }
 });
 
+/** -------- Justificativa para Dispensa -------- */
+router.post("/justificativa-dispensa", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const proj = body.proj || {};
+    const processo = body.processo || {};
+
+    const instituicao = (body.instituicao || proj.instituicao || "EDGE").toString();
+    const cnpjInstituicao = (body.cnpjInstituicao || proj.cnpj || "").toString();
+    const termoParceria = (body.termo || proj.termoParceria || "").toString();
+    const projetoNome = (body.projeto || proj.projetoNome || "").toString();
+    const projetoCodigo = (body.codigoProjeto || proj.projetoCodigo || "").toString();
+    const rubrica = (body.tipoRubrica || body.rubrica || processo.naturezaDisp || "").toString();
+    const objeto = (body.objeto || processo.objeto || "").toString();
+    const justificativa = (body.justificativa || processo.justificativa || "").toString();
+    const favorecido = (body.favorecido || processo.favorecidoNome || "").toString();
+    const cnpjFav = (body.cnpjFav || processo.favorecidoDoc || "").toString();
+    const valorContrato = fmtBRL(body.valor || processo.valor || "");
+
+    const pagamentoIso = processo.dataPagamentoISO || body.dataPagamentoISO || parseBrDateToIso(body.dataPagamento || "");
+    const dataPagamento = fmtBRDate(pagamentoIso || body.dataPagamento || "");
+    const localidade = (body.localidade || body.extras?.cidade || "Maceió").toString();
+    const dia = body.dia || "";
+    const mes = body.mes || "";
+    const ano = body.ano || "";
+    const coordenador = (body.coordenador || proj.coordenador || "").toString();
+    const dataExtenso = buildDateExtenso(localidade, pagamentoIso, dia, mes, ano);
+
+    const templatePath = path.join(TPL_JUST_DIR, "justificativa_dispensa.docx");
+    if (!fs.existsSync(templatePath)) {
+      console.error("Template ausente:", templatePath);
+      return res.status(404).json({ ok: false, error: "Template não encontrado: justificativa_dispensa.docx" });
+    }
+
+    const zip = new PizZip(fs.readFileSync(templatePath));
+    const docXmlPath = "word/document.xml";
+    const fileEntry = zip.file(docXmlPath);
+    if (!fileEntry) {
+      return res.status(500).json({ ok: false, error: "Template de justificativa inválido." });
+    }
+
+    let xml = fileEntry.asText();
+
+    const projetoDisplay = projetoCodigo
+      ? `${projetoNome || "Projeto"} (${projetoCodigo})`
+      : (projetoNome || projetoCodigo || "—");
+
+    xml = setTableValue(xml, "Instituição Executora:", instituicao || "—");
+    xml = setTableValue(xml, "CNPJ:", cnpjInstituicao || "—");
+    xml = setTableValue(xml, "Termo de Parceria nº:", termoParceria || "—");
+    xml = setTableValue(xml, "Projeto:", projetoDisplay || "—");
+    xml = setTableValue(xml, "Natureza de Dispêndio:", rubrica || "—");
+    xml = setParagraphAfterHeading(xml, "Objeto da cotação", objeto || "—");
+    xml = setTableValue(xml, "Fornecedor Contratado:", favorecido || "—");
+    xml = setTableValue(xml, "CNPJ do Contratado:", cnpjFav || "—");
+    xml = setTableValue(xml, "Valor Contratado:", valorContrato || "—");
+    xml = setTableValue(xml, "Data da Aquisição:", dataPagamento || "—");
+    xml = setParagraphAfterHeading(xml, "Justificativa da dispensa da cotação", justificativa || "—");
+
+    xml = xml.replace(
+      "__________, ____ de ___________ de _______",
+      escapeXml(dataExtenso || `${localidade}, — de — de —`)
+    );
+
+    const assinaturaMsg = coordenador
+      ? `Assinado eletronicamente por ${coordenador}.`
+      : "Assinado eletronicamente.";
+    xml = setParagraphAfterHeading(xml, "Assinatura e nome do Coordenador", assinaturaMsg, { fallback: assinaturaMsg });
+    xml = xml.replace("{assinatura eletrônica com certificado digital ICP}", "");
+
+    zip.file(docXmlPath, xml);
+
+    const out = zip.generate({ type: "nodebuffer" });
+    const hintBase = body.filenameHint || `Justificativa_${projetoCodigo || projetoNome || "dispensa"}`;
+    const filename = sanitizeFilename(hintBase, "justificativa_dispensa");
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}.docx"`);
+    return res.send(out);
+  } catch (err) {
+    console.error("[/api/generate/justificativa-dispensa] erro", err);
+    return res.status(500).json({ ok: false, error: "Erro ao gerar a Justificativa para Dispensa" });
+  }
+});
+
 export default router;
 
 /* ==================== (Opcional) registro direto no app ==================== */
@@ -422,4 +607,5 @@ export function registerDocRoutes(app, { /* openai não usado aqui */ TEMPLATE_B
   // Espelha as mesmas rotas do router sob o prefixo /api/generate
   app.post("/api/generate/folha-rosto", (req, res, next) => router.handle(req, res, next));
   app.post("/api/generate/mapa-cotacao", (req, res, next) => router.handle(req, res, next));
+  app.post("/api/generate/justificativa-dispensa", (req, res, next) => router.handle(req, res, next));
 }
