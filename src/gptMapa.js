@@ -1,5 +1,5 @@
 // src/gptMapa.js
-import OpenAI from "openai";
+import { ensureOpenAIClient } from "./openaiProvider.js";
 import {
   SYSTEM_EXTRACAO_COTACOES,
   USER_EXTRACAO_COTACOES,
@@ -7,7 +7,13 @@ import {
   USER_GERACAO_TEXTO
 } from "./promptsMapa.js";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function requireClient() {
+  const client = ensureOpenAIClient();
+  if (!client) {
+    throw new Error("OpenAI API key ausente ou inválida");
+  }
+  return client;
+}
 
 /**
  * Extrai propostas de cotações (texto já OCRizado)
@@ -20,6 +26,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 export async function extrairCotacoesDeTexto(params) {
   const userPrompt = USER_EXTRACAO_COTACOES(params);
+  const client = requireClient();
   const resp = await client.responses.create({
     model: "gpt-4o-mini",
     input: [
@@ -53,6 +60,7 @@ export async function extrairCotacoesDeTexto(params) {
  */
 export async function gerarObjetoEJustificativa(params) {
   const userPrompt = USER_GERACAO_TEXTO(params);
+  const client = requireClient();
   const resp = await client.responses.create({
     model: "gpt-4o",
     input: [

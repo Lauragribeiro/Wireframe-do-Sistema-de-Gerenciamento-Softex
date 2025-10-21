@@ -157,19 +157,25 @@ document.addEventListener('DOMContentLoaded', function () {
     return (Y-y0)*12 + (M-m0) + 1;
   };
 
-  const deepMerge = (dst, src) => {
-    if (!src) return dst;
-    for (const k of Object.keys(src)) {
-      const v = src[k];
-      if (v && typeof v === "object" && !Array.isArray(v)) {
+  const deepMerge = (dst, src) => {
+    if (!src) return dst;
+    for (const k of Object.keys(src)) {
+      const v = src[k];
+      if (v && typeof v === "object" && !Array.isArray(v)) {
         if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
         deepMerge(dst[k], v);
       } else {
         if (v !== undefined && v !== null && v !== "") dst[k] = v;
       }
-    }
-    return dst;
-  };
+    }
+    return dst;
+  };
+  const clonePropostas = (list) => Array.isArray(list) ? list.map((item) => ({ ...item })) : [];
+  const cloneAvisos = (list) => Array.isArray(list) ? list.map((item) => String(item)) : [];
+  const normalizeObjeto = (val) => {
+    if (val == null) return "";
+    return String(val).trim();
+  };
 /* ================== Seletores / Estado ================== */
 const form    = $("#form-evid");
 const tblBody = $("#tbl-pc tbody");
@@ -380,6 +386,28 @@ $$('[data-pick]').forEach((btn) => {
       if (inJust && lastParsedDocs.just) inJust.value = String(lastParsedDocs.just || "");
       // depois de deepMerge(...)
 
+      if (Array.isArray(lastParsedDocs.cotacoes_propostas) && lastParsedDocs.cotacoes_propostas.length) {
+        console.log("[docfin] Propostas extraídas via IA:", lastParsedDocs.cotacoes_propostas);
+      }
+      if (lastParsedDocs.cotacoes_objeto) {
+        console.log("[docfin] Objeto sugerido:", lastParsedDocs.cotacoes_objeto);
+      }
+
+      const nfMask = lastParsedDocs.nf_num_9_mask || lastParsedDocs.nf_mask || "";
+      const nfNine = lastParsedDocs.nf_num_9 || lastParsedDocs.nf || "";
+      const nfDisplay = nfMask || (nfNine ? mask9(nfNine) : "");
+      const dataTituloISO = lastParsedDocs.data_emissao_iso || "";
+      const dataTituloBR = dataTituloISO ? formatDateBR(dataTituloISO) : (lastParsedDocs.dataTitulo || "");
+      const nfHint = $("#hint-nf");
+      if (nfHint && (nfDisplay || dataTituloBR)) {
+        const pieces = [];
+        if (nfDisplay) pieces.push(`NF: ${nfDisplay}`);
+        if (dataTituloBR) pieces.push(`Emissão: ${dataTituloBR}`);
+        nfHint.textContent = pieces.join(" • ");
+      }
+
+      await maybeAutoInsertRow("parse-docs");
+
     } else {
       console.warn("[docfin] parse-docs não OK:", j);
     }
@@ -456,13 +484,29 @@ async function maybeAutoInsertRow(reason = "") {
   const mesLabel = mesAnoValue ? mesAnoToLabel(mesAnoValue) : monthLabelPlusOne(dataPagISO);
   const rubSel = getRubricaSelection(selRubrica);
 
+  const nfNine = lastParsedDocs?.nf_num_9 || leftPad9(
+    lastParsedDocs?.nf ||
+    lastParsedDocs?.nf_num_9_mask ||
+    lastParsedDocs?.nf_num ||
+    lastParsedDocs?.nf_num_mask ||
+    nfCurta
+  );
+  const nfMask = lastParsedDocs?.nf_num_9_mask || (nfNine ? mask9(nfNine) : "");
+  const objetoAI = normalizeObjeto(lastParsedDocs?.cotacoes_objeto || lastParsedDocs?.objeto || "");
+  const propostasAI = clonePropostas(lastParsedDocs?.cotacoes_propostas || lastParsedDocs?.propostas || []);
+  const avisosAI = cloneAvisos(lastParsedDocs?.cotacoes_avisos || []);
+
   const row = {
     id: Math.random().toString(36).slice(2),
     favorecido,
     pcNumero: dataPagISO ? pcLabelForPayment(dataPagISO) : "",
     cnpj: cnpjDigits ? maskCNPJ(cnpjDigits) : "",
     dataTitulo: dataTituloISO || "",
-    nf: nfCurta || "",
+    data_emissao_iso: dataTituloISO || "",
+    nf: nfMask || nfNine || "",
+    nf_mask: nfMask || "",
+    nf_num_9: nfNine || "",
+    nf_num_9_mask: nfMask || "",
     nExtrato,
     dataPagamento: dataPagISO || "",
     valor: valorNum,
@@ -472,6 +516,13 @@ async function maybeAutoInsertRow(reason = "") {
     mesLabel: mesLabel || "",
     mesAno: mesAnoValue || "",
     just: (document.querySelector("#inputJust")?.value || lastParsedDocs?.just || "").trim(),
+    objeto: objetoAI,
+    cotacaoObjeto: objetoAI,
+    cotacoes_objeto: objetoAI,
+    propostas: propostasAI,
+    cotacoes_propostas: clonePropostas(propostasAI),
+    cotacoes_avisos: avisosAI,
+    cotacoesAvisos: avisosAI,
     docs: {
       nf: window.formDocs?.nf || null,
       oficio: window.formDocs?.oficio || null,
@@ -955,6 +1006,7 @@ function nfFromChave(chave44){
   return c.slice(25, 34);
 }
 function nfDisplay(r){
+  if (r.nf_mask)       return r.nf_mask;
   if (r.nf_num_9_mask) return r.nf_num_9_mask;
   if (r.nf_num_9)      return mask9(r.nf_num_9);
   if (r.nf_num_mask)   return r.nf_num_mask;
@@ -1056,6 +1108,41 @@ document.addEventListener("click", async (e) => {
       // força a célula NF a usar nosso helper
       const tdNf = tr.querySelector('[data-col="nf"]');
       if (tdNf) tdNf.textContent = nfDisplay(r.data);
+
+      const respRow = r.data;
+      const rowId = respRow?.id || payload.id || id;
+      const idxRow = rows.findIndex((row) => String(row.id) === String(rowId));
+      if (idxRow >= 0) {
+        const prev = rows[idxRow];
+        const mergedRow = { ...prev, ...respRow };
+        if (Array.isArray(respRow.propostas)) {
+          mergedRow.propostas = clonePropostas(respRow.propostas);
+          mergedRow.cotacoes_propostas = clonePropostas(respRow.propostas);
+        } else if (Array.isArray(prev.propostas)) {
+          mergedRow.propostas = clonePropostas(prev.propostas);
+          if (!Array.isArray(mergedRow.cotacoes_propostas)) {
+            mergedRow.cotacoes_propostas = clonePropostas(prev.propostas);
+          }
+        }
+        if (!Array.isArray(mergedRow.cotacoes_propostas) && Array.isArray(prev.cotacoes_propostas)) {
+          mergedRow.cotacoes_propostas = clonePropostas(prev.cotacoes_propostas);
+        }
+        if (respRow.objeto) {
+          mergedRow.objeto = respRow.objeto;
+          mergedRow.cotacaoObjeto = respRow.objeto;
+          mergedRow.cotacoes_objeto = respRow.objeto;
+        } else {
+          if (!mergedRow.objeto && prev.objeto) mergedRow.objeto = prev.objeto;
+          if (!mergedRow.cotacoes_objeto && prev.cotacoes_objeto) mergedRow.cotacoes_objeto = prev.cotacoes_objeto;
+        }
+        if (Array.isArray(respRow.cotacoes_avisos)) {
+          mergedRow.cotacoes_avisos = cloneAvisos(respRow.cotacoes_avisos);
+        } else if (Array.isArray(prev.cotacoes_avisos)) {
+          mergedRow.cotacoes_avisos = cloneAvisos(prev.cotacoes_avisos);
+        }
+        rows[idxRow] = mergedRow;
+      }
+
       disableInlineEdit(tr);
       toggleButtons(tr, { editar:true, salvar:false, cancelar:false });
       markTableDirty();
@@ -1098,7 +1185,7 @@ function applyRowValues(tr, row) {
     if (td) td.textContent = v ?? "";
   };
   set("dataTitulo", row.dataTitulo || "");
-  set("nf", row.nf_num || row.nf_num_mask || row.nf_num_9_mask || row.nf_num_9 || row.nf || "");
+  set("nf", nfDisplay(row));
   set("nExtrato", row.nExtrato || "");
   set("dataPagamento", row.dataPagamento || "");
   set("valor", row.valor != null ? `R$ ${Number(row.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "");
@@ -1544,6 +1631,18 @@ form.addEventListener("submit", async (e) => {
 
     const rubSel = getRubricaSelection(selRubrica);
 
+    const nfNine = lastParsedDocs?.nf_num_9 || leftPad9(
+      nfCurta ||
+      lastParsedDocs?.nf ||
+      lastParsedDocs?.nf_num ||
+      lastParsedDocs?.nf_num_mask ||
+      lastParsedDocs?.nf_num_9_mask
+    );
+    const nfMask = lastParsedDocs?.nf_num_9_mask || (nfNine ? mask9(nfNine) : "");
+    const objetoAI = normalizeObjeto(lastParsedDocs?.cotacoes_objeto || lastParsedDocs?.objeto || "");
+    const propostasAI = clonePropostas(lastParsedDocs?.cotacoes_propostas || lastParsedDocs?.propostas || []);
+    const avisosAI = cloneAvisos(lastParsedDocs?.cotacoes_avisos || []);
+
     // Linha
     const row = {
       id: uid(),
@@ -1551,7 +1650,11 @@ form.addEventListener("submit", async (e) => {
       pcNumero: dataPagISO ? pcLabelForPayment(dataPagISO) : "",
       cnpj: cnpjDigits ? maskCNPJ(cnpjDigits) : "",
       dataTitulo: dataTituloISO || "",
-      nf: nfCurta || "",
+      data_emissao_iso: dataTituloISO || "",
+      nf: nfMask || nfNine || "",
+      nf_mask: nfMask || "",
+      nf_num_9: nfNine || "",
+      nf_num_9_mask: nfMask || "",
       nExtrato,
       dataPagamento: dataPagISO || "",
       valor: valorNum,
@@ -1561,6 +1664,13 @@ form.addEventListener("submit", async (e) => {
       mesLabel,
       mesAno: mesAnoValue || "",
       just: (inJust?.value || lastParsedDocs?.just || "").trim(),
+      objeto: objetoAI,
+      cotacaoObjeto: objetoAI,
+      cotacoes_objeto: objetoAI,
+      propostas: propostasAI,
+      cotacoes_propostas: clonePropostas(propostasAI),
+      cotacoes_avisos: avisosAI,
+      cotacoesAvisos: avisosAI,
       docs: {
         nf: formDocs.nf || null,
         oficio: formDocs.oficio || null,
@@ -2084,15 +2194,25 @@ form.addEventListener("submit", async (e) => {
     const cotacoesSlim = pickCotacoesFromRow(row);
 
     // Propostas preenchidas manualmente (se houver na linha)
-    let propostasEstr = Array.isArray(row?.propostas) ? row.propostas : [];
+    let propostasEstr = Array.isArray(row?.propostas) ? clonePropostas(row.propostas) : [];
+    if (!propostasEstr.length && Array.isArray(row?.cotacoes_propostas)) {
+      propostasEstr = clonePropostas(row.cotacoes_propostas);
+    }
+    if (!propostasEstr.length && Array.isArray(lastParsedDocs?.cotacoes_propostas)) {
+      propostasEstr = clonePropostas(lastParsedDocs.cotacoes_propostas);
+    }
     propostasEstr = propostasEstr
-      .map(p => ({
-        selecao:        S(p.selecao || p.selecionada || ""),
-        ofertante:      S(p.ofertante || p.fornecedor || ""),
-        cnpj_ofertante: S(p.cnpj || p.cpf || ""),
-        data_cotacao:   toBR(p.data || p.dataCotacao || ""),
-        valor:          S(p.valor || p.preco || p.total || "")
-      }))
+      .map((p, idx) => {
+        const valorNum = typeof p.valor_num === "number" ? p.valor_num : (typeof p.valor === "number" ? p.valor : null);
+        const valorRaw = valorNum != null ? valorNum : S(p.valor || p.preco || p.total || "");
+        return {
+          selecao:        S(p.selecao || p.selecionada || "") || `Cotação ${idx + 1}`,
+          ofertante:      S(p.ofertante || p.fornecedor || ""),
+          cnpj_ofertante: S(p.cnpj || p.cnpj_ofertante || p.cpf || ""),
+          data_cotacao:   toBR(p.data_cotacao || p.dataCotacao || p.data || ""),
+          valor:          valorRaw,
+        };
+      })
       .filter(p => p.ofertante || p.cnpj_ofertante || p.data_cotacao || p.valor);
 
     const propostas = normalizaPropostas(propostasEstr);
@@ -2102,6 +2222,15 @@ form.addEventListener("submit", async (e) => {
     const dia = String(baseDate.getDate()).padStart(2,"0");
     const mes = String(baseDate.getMonth()+1).padStart(2,"0");
     const ano = String(baseDate.getFullYear());
+
+    const objetoDesc = normalizeObjeto(
+      row.objeto ||
+      row.cotacaoObjeto ||
+      row.cotacoes_objeto ||
+      row.objetoDescricao ||
+      lastParsedDocs?.cotacoes_objeto ||
+      ""
+    ) || "Não informado";
 
     const payload = {
       instituicao:   S(proj.instituicao || "EDGE"),
@@ -2123,6 +2252,8 @@ form.addEventListener("submit", async (e) => {
       dia, mes, ano,
       coordenador:   S(proj.coordenador || ""),
       filenameHint:  `MapaCotacao_${S(proj.codigo || "Projeto")}_${S(row.pcNumero || "")}`,
+      objetoDescricao: objetoDesc,
+      objeto: objetoDesc,
 
       // campos do template
       codigo_projeto: S(proj.codigo),
@@ -2144,7 +2275,7 @@ form.addEventListener("submit", async (e) => {
       },
       processo: {
         naturezaDisp:     S(natureza),
-        objeto:           S(row.objeto || ""),
+        objeto:           S(objetoDesc),
         justificativa:    S(row.just || row.justificativa || ""),
         dataAquisicaoISO: S(row.dataPagamento || ""),
       },
@@ -2154,6 +2285,9 @@ form.addEventListener("submit", async (e) => {
 
     // Sempre mande 'propostas' (mesmo vazia) para o loop do template
     payload.propostas = propostas;
+    if (Array.isArray(row.cotacoes_avisos) && row.cotacoes_avisos.length) {
+      payload.cotacoesAvisos = cloneAvisos(row.cotacoes_avisos);
+    }
 
     console.log("[docfin] buildPayloadMapa", {
       propostasLen: propostas.length,

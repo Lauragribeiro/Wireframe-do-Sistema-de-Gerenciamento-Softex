@@ -1,7 +1,13 @@
 // src/gptExtract.js
-import OpenAI from "openai";
+import { ensureOpenAIClient } from "./openaiProvider.js";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function requireClient() {
+  const client = ensureOpenAIClient();
+  if (!client) {
+    throw new Error("OpenAI API key ausente ou inválida");
+  }
+  return client;
+}
 
 // prompt-base: pedimos JSON estrito com chaves que o front já usa
 const SYSTEM = `Você é um extrator para prestação de contas. 
@@ -30,6 +36,7 @@ function normalizeMonthYear(iso) {
 
 export async function extractFromText({ text, purpose }) {
   const user = `Documento (${purpose}). Texto a seguir:\n\n${text.slice(0, 200_000)}`;
+  const client = requireClient();
   const resp = await client.responses.create({
     model: "gpt-4o-mini",
     input: [
@@ -53,6 +60,7 @@ export async function extractFromText({ text, purpose }) {
 }
 
 export async function extractFromImage({ dataURL, purpose }) {
+  const client = requireClient();
   const resp = await client.responses.create({
     model: "gpt-4o-mini",
     input: [

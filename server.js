@@ -23,6 +23,7 @@ import parseDocsRouter, { extractPurchaseDocData } from "./src/parseDocs.js";
 import vendorsRouter                   from "./src/vendors.js";
 // import purchasesRouter               from "./src/purchases.js"; // ⇐ NÃO usar (router interno abaixo)
 import generateDocsRouter, { registerDocRoutes } from "./src/generateDocs.js";
+import { ensureOpenAIClient, hasOpenAIKey, invalidateOpenAIClient } from "./src/openaiProvider.js";
 import cnpjProxyRouter                 from "./src/cnpjProxy.js";
 
 // __dirname helpers (ESM)
@@ -38,15 +39,7 @@ const PURCHASES_FILE= join(DATA_DIR, "purchases.json");
 const TEMPLATE_BASE = join(__dirname, "src", "templates");
 
 // ===== OpenAI opcional =====
-const hasOpenAI = !!process.env.OPENAI_API_KEY;
-let OpenAI = null;
-if (hasOpenAI) {
-  try {
-    OpenAI = (await import("openai")).default;
-  } catch {
-    console.warn("[OpenAI] não instalado; prosseguindo sem IA.");
-  }
-}
+const hasOpenAI = hasOpenAIKey();
 
 /* ========================================================================== *
  *  Preparação de diretórios
@@ -267,6 +260,74 @@ function normalizeMoney(value) {
   return Number.isFinite(num) ? num : "";
 }
 
+function maskDocBR(doc = "") {
+  const digits = onlyDigits(doc);
+  if (digits.length === 14) return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*$/, "$1.$2.$3/$4-$5");
+  if (digits.length === 11) return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2}).*$/, "$1.$2.$3-$4");
+  return toStringSafe(doc);
+}
+
+function safeParseJSON(value) {
+  if (typeof value !== "string") return null;
+  try { return JSON.parse(value); }
+  catch { return null; }
+}
+
+function parsePropostasList(body = {}) {
+  const sources = [];
+  if (Array.isArray(body.propostas)) sources.push(body.propostas);
+  const propJson = safeParseJSON(body.propostas_json || body.propostasJSON);
+  if (Array.isArray(propJson)) sources.push(propJson);
+  if (Array.isArray(body.cotacoes_propostas)) sources.push(body.cotacoes_propostas);
+  const cotJson = safeParseJSON(body.cotacoes_propostas_json || body.cotacoesJson);
+  if (Array.isArray(cotJson)) sources.push(cotJson);
+  if (Array.isArray(body.mapaPropostas)) sources.push(body.mapaPropostas);
+
+  const rawList = sources.find((arr) => Array.isArray(arr) && arr.length) || [];
+  const normalized = [];
+
+  rawList.forEach((item, idx) => {
+    if (!item || typeof item !== "object") return;
+
+    const selecaoRaw = toStringSafe(item.selecao ?? (item.selecionada ? "SELECIONADA" : ""));
+    const ofertante = toStringSafe(item.ofertante ?? item.fornecedor ?? item.nome);
+    const doc = maskDocBR(item.cnpj ?? item.cnpj_ofertante ?? item.cnpjCpf ?? item.cnpj_cpf ?? item.cpf);
+    const dataISO = normalizeDate(
+      item.dataCotacao ?? item.data_cotacao ?? item.data ?? item.dataCotacaoISO ?? item.data_cotacao_iso
+    );
+    const valorNum = normalizeMoney(
+      item.valor_num ?? item.valor ?? item.preco ?? item.total ?? item.valor_proposta
+    );
+
+    const proposal = {
+      selecao: selecaoRaw || (item.selecionada ? "SELECIONADA" : `Cotação ${idx + 1}`),
+      ofertante,
+      cnpj: doc,
+      cnpj_ofertante: doc,
+      data_cotacao: dataISO || toStringSafe(item.data_cotacao ?? item.dataCotacao ?? item.data),
+    };
+
+    if (dataISO) proposal.data_cotacao_iso = dataISO;
+
+    if (typeof valorNum === "number" && Number.isFinite(valorNum)) {
+      proposal.valor = valorNum;
+      proposal.valor_num = valorNum;
+    } else {
+      const rawValor = toStringSafe(item.valor ?? item.preco ?? item.total ?? item.valor_proposta);
+      proposal.valor = rawValor;
+      if (typeof item.valor_num === "number" && Number.isFinite(item.valor_num)) {
+        proposal.valor_num = item.valor_num;
+      } else {
+        proposal.valor_num = null;
+      }
+    }
+
+    normalized.push(proposal);
+  });
+
+  return normalized;
+}
+
 function normalizeDocs(body = {}) {
   const src = body.docs || body.documentacao || body.documentos || {};
   const ordemVal = src.ordem ?? src.ordem_fornecimento ?? src.ordemFornecimento ?? null;
@@ -402,6 +463,21 @@ async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = 
 
   const docs = normalizeDocs(body);
 
+  const objetoBase = toStringSafe(
+    body.objeto ??
+    body.objetoDescricao ??
+    body.cotacaoObjeto ??
+    body.objeto_cotacao ??
+    body.objetoMapa ??
+    body.objetoDescricaoMapa ??
+    ""
+  );
+  const propostasList = parsePropostasList(body);
+  const cotAvisosSrc = body.cotacoesAvisos ?? body.cotacoes_avisos;
+  const cotacoesAvisos = Array.isArray(cotAvisosSrc)
+    ? cotAvisosSrc.map((v) => toStringSafe(v)).filter(Boolean)
+    : [];
+
   const out = {
     favorecido: toStringSafe(body.favorecido ?? body.favorecidoNome ?? body.nomeFavorecido),
     cnpj: toStringSafe(body.cnpj ?? body.cnpjFav ?? body.favorecidoDoc),
@@ -416,6 +492,12 @@ async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = 
     mesAno,
     just,
     docs,
+    objeto: objetoBase,
+    cotacaoObjeto: objetoBase,
+    cotacoes_objeto: objetoBase,
+    objetoDescricao: objetoBase,
+    propostas: propostasList,
+    cotacoes_propostas: propostasList,
   };
 
   if (assignId || idRaw != null) {
@@ -465,21 +547,11 @@ async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = 
   out.data_emissao = out.data_emissao ?? dataTitulo;
   out.nf = nf;
   out.nf_recibo = nf;
-  const nfDigits = nf.replace(/\D+/g, "");
-  if (nfDigits) {
-    const nine = nfDigits.padStart(9, "0").slice(-9);
-    const mask = `${nine.slice(0, 3)}.${nine.slice(3, 6)}.${nine.slice(6)}`;
-    out.nf_num = out.nf_num ?? nine;
-    out.nf_num_mask = out.nf_num_mask ?? mask;
-    out.nf_num_9 = out.nf_num_9 ?? nine;
-    out.nf_num_9_mask = out.nf_num_9_mask ?? mask;
-  } else {
-    out.nf_num = out.nf_num ?? nf;
-    out.nf_num_mask = out.nf_num_mask ?? nf;
-    out.nf_num_9 = out.nf_num_9 ?? nf;
-    out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
-  }
-  out.just = just;
+  out.nf_num = out.nf_num ?? nf;
+  out.nf_num_mask = out.nf_num_mask ?? nf;
+  out.nf_num_9 = out.nf_num_9 ?? nf;
+  out.nf_num_9_mask = out.nf_num_9_mask ?? nf;
+  if (!out.nf_mask && out.nf_num_9_mask) out.nf_mask = out.nf_num_9_mask;
   out.justificativa = just;
   out.justificativa_para_compra = out.justificativa_para_compra ?? just;
   out.numero_extrato = nExtrato;
@@ -501,6 +573,11 @@ async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = 
   out.mesAno = mesAno;
   out.mes_ano = mesAno;
   out.docs = docs;
+
+  if (cotacoesAvisos.length) {
+    out.cotacoesAvisos = cotacoesAvisos;
+    out.cotacoes_avisos = cotacoesAvisos;
+  }
 
   return out;
 }
@@ -739,7 +816,7 @@ app.use("/api", cnpjProxyRouter);
 app.use("/api", docRouter);
 
 // Expor base de templates e registrar rotas de geração (seu módulo)
-const openai = process.env.OPENAI_API_KEY ? null : null;
+const openai = ensureOpenAIClient();
 registerDocRoutes(app, { openai, TEMPLATE_BASE });
 
 /* ========================================================================== *
@@ -896,9 +973,10 @@ async function ensureCotacoesText(cotacoes = []) {
 }
 
 async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotacoes = [] } = {}) {
-  if (!hasOpenAI || !OpenAI) return { objeto: "", propostas: [] };
+  if (!hasOpenAI) return { objeto: "", propostas: [] };
   try {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const client = ensureOpenAIClient();
+    if (!client) return { objeto: "", propostas: [] };
     const blocks = (cotacoes || [])
       .map((c, idx) => {
         const name = c?.name || c?.filename || c?.fileName || `Cotacao_${idx + 1}`;
@@ -937,6 +1015,11 @@ async function extractFromCotacoesWithAI({ instituicao = "", rubrica = "", cotac
 
     return { objeto, propostas };
   } catch (err) {
+    const code = err?.status || err?.statusCode || err?.code;
+    const msg  = String(err?.message || "").toLowerCase();
+    if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
+      invalidateOpenAIClient();
+    }
     console.warn("[mapa] extractFromCotacoesWithAI falhou:", err?.message || err);
     return { objeto: "", propostas: [] };
   }
