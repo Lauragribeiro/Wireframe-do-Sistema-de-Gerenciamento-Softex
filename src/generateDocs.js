@@ -11,6 +11,7 @@ dayjs.locale("pt-br");
 import { buildPayloadBase } from "./utils/docxPayload.js";
 import { ensureFields, REQUIRED_MAPA, REQUIRED_FOLHA } from "./utils/templateGuards.js";
 import { ensureOpenAIClient, hasOpenAIKey, invalidateOpenAIClient } from "./openaiProvider.js";
+import { extrairCotacoesDeTexto, gerarObjetoEJustificativa } from "./gptMapa.js";
 
 /** ===== OpenAI opcional (para extrair dados das cotações) ===== */
 const hasOpenAI = hasOpenAIKey();
@@ -51,6 +52,153 @@ function fmtBRL(v) {
   const n = typeof v === "number" ? v : Number(String(v).replace(/\./g, "").replace(",", "."));
   if (Number.isNaN(n)) return String(v);
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function parseValorToNumber(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const cleaned = String(raw)
+    .replace(/[\sR$]/g, "")
+    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".")
+    .replace(/[^0-9+\-\.]/g, "");
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isFilled(value) {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  const normalized = text.replace(/\s+/g, " ").toLowerCase();
+  return normalized !== "não informado" && normalized !== "nao informado" && normalized !== "—" && normalized !== "-";
+}
+
+function normalizeProposal(entry = {}, idx = 0) {
+  const rawSelecao = entry.selecao ?? entry.selection ?? entry.rotulo ?? entry.label ?? "";
+  let selecao = String(rawSelecao || "").trim();
+  if (!selecao) selecao = `Cotação ${idx + 1}`;
+  if (/selecionad/i.test(selecao)) selecao = "SELECIONADA";
+
+  const ofertante = String(
+    entry.ofertante ?? entry.fornecedor ?? entry.nome ?? entry.razao_social ?? ""
+  ).trim();
+
+  const docRaw = String(
+    entry.cnpj_ofertante ?? entry.cnpj ?? entry.cnpjCpf ?? entry.cnpj_cpf ?? entry.cpf ?? entry.documento ?? ""
+  ).trim();
+
+  const dataRaw = entry.data_cotacao ?? entry.dataCotacao ?? entry.data ?? entry.dataCotacaoBR ?? entry.dataCotacaoISO ?? "";
+  const dataFmt = fmtBRDate(dataRaw || "");
+  const dataValue = dataFmt || (typeof dataRaw === "string" ? dataRaw.trim() : "");
+
+  const valorNum = parseValorToNumber(
+    entry.valor_num ?? entry.valor ?? entry.valor_total ?? entry.total ?? entry.preco ?? entry.valorProposta
+  );
+
+  const valorCandidates = [
+    entry.valor_formatado,
+    entry.valor_label,
+    entry.valorBR,
+    entry.valor_exibicao,
+    entry.valor,
+    entry.total,
+    entry.valor_total,
+  ];
+
+  let valorLabel = "";
+  for (const candidate of valorCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      valorLabel = candidate.trim();
+      break;
+    }
+  }
+  if (!valorLabel && Number.isFinite(valorNum)) valorLabel = fmtBRL(valorNum);
+
+  return {
+    selecao,
+    ofertante,
+    cnpj: docRaw,
+    cnpj_ofertante: docRaw,
+    data: dataValue,
+    data_cotacao: dataValue,
+    valor: valorLabel,
+    valor_num: Number.isFinite(valorNum) ? valorNum : null,
+  };
+}
+
+function mergeProposalFields(base = {}, fallback = {}) {
+  const out = { ...base };
+  const src = fallback || {};
+
+  if (!isFilled(out.selecao) && isFilled(src.selecao)) out.selecao = src.selecao;
+  if (!isFilled(out.ofertante) && isFilled(src.ofertante)) out.ofertante = src.ofertante;
+
+  if (!isFilled(out.cnpj_ofertante) && isFilled(src.cnpj_ofertante)) {
+    out.cnpj_ofertante = src.cnpj_ofertante;
+  }
+  if (!isFilled(out.cnpj) && isFilled(src.cnpj)) {
+    out.cnpj = src.cnpj;
+  }
+  if (!isFilled(out.cnpj) && isFilled(out.cnpj_ofertante)) out.cnpj = out.cnpj_ofertante;
+  if (!isFilled(out.cnpj_ofertante) && isFilled(out.cnpj)) out.cnpj_ofertante = out.cnpj;
+
+  if (!isFilled(out.data_cotacao) && isFilled(src.data_cotacao)) {
+    out.data_cotacao = src.data_cotacao;
+    out.data = src.data_cotacao;
+  }
+  if (!isFilled(out.data) && isFilled(out.data_cotacao)) out.data = out.data_cotacao;
+
+  if (!isFilled(out.valor) && isFilled(src.valor)) out.valor = src.valor;
+
+  if ((out.valor_num === null || out.valor_num === undefined) && Number.isFinite(src.valor_num)) {
+    out.valor_num = src.valor_num;
+  }
+
+  return out;
+}
+
+function hasProposalData(p = {}) {
+  return (
+    isFilled(p.ofertante) ||
+    isFilled(p.cnpj_ofertante) ||
+    isFilled(p.cnpj) ||
+    isFilled(p.data_cotacao) ||
+    isFilled(p.valor)
+  );
+}
+
+function ensureSelecionada(propostas = []) {
+  let jaSelecionada = false;
+  let menorIdx = -1;
+  let menorValor = Number.POSITIVE_INFINITY;
+
+  propostas.forEach((p, idx) => {
+    if (/selecionad/i.test(String(p.selecao || ""))) {
+      p.selecao = "SELECIONADA";
+      jaSelecionada = true;
+    }
+    const valorNum = parseValorToNumber(p.valor_num ?? p.valor);
+    if (Number.isFinite(valorNum) && valorNum < menorValor) {
+      menorValor = valorNum;
+      menorIdx = idx;
+    }
+  });
+
+  if (!jaSelecionada && menorIdx >= 0 && propostas[menorIdx]) {
+    propostas[menorIdx].selecao = "SELECIONADA";
+  }
+
+  propostas.forEach((p) => {
+    if (Number.isFinite(p.valor_num) && (!p.valor || !p.valor.trim() || !p.valor.includes("R$"))) {
+      p.valor = fmtBRL(p.valor_num);
+    }
+    if (p.cnpj_ofertante && !p.cnpj) p.cnpj = p.cnpj_ofertante;
+    if (!p.cnpj_ofertante && p.cnpj) p.cnpj_ofertante = p.cnpj;
+    if (!p.data_cotacao && p.data) p.data_cotacao = p.data;
+    if (!p.data && p.data_cotacao) p.data = p.data_cotacao;
+  });
 }
 function sanitizeFilename(name, fallback = "documento") {
   return String(name || fallback)
@@ -264,83 +412,6 @@ function guessFromText(txt = "") {
 }
 
 // Nome do arquivo como pista do fornecedor
-function prettyFromFilename(name = "") {
-  const base = String(name).replace(/\.[^.]+$/, "");
-  const parts = base.split("-").filter(Boolean);
-  const last = parts[parts.length - 1] || "";
-  return last.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
-}
-
-// Constrói propostas a partir de uma lista de NOMES de arquivos
-async function buildPropostasFromFilenames(names = []) {
-  const out = [];
-  for (let i = 0; i < names.length; i++) {
-    const name = String(names[i]);
-    const text = await readPdfTextFromUploads(name);
-    const g = guessFromText(text);
-    const fallbackFornecedor = g.ofertante || prettyFromFilename(name);
-    out.push({
-      selecao: `Cotação ${i + 1}`,
-      ofertante: fallbackFornecedor || "",
-      cnpj: g.cnpj_ofertante || "",
-      cnpj_ofertante: g.cnpj_ofertante || "",
-      data: g.data_cotacao || "",
-      data_cotacao: g.data_cotacao || "",
-      valor: g.valor || ""
-    });
-  }
-  // se tudo vazio, retorna []
-  return out.filter(p => p.ofertante || p.cnpj_ofertante || p.data_cotacao || p.valor);
-}
-
-/* ============ AI helper (opcional) para ler cotações ============ */
-async function extractCotacoesWithAI(cotacoes = []) {
-  if (!hasOpenAI) return [];
-  try {
-    const client = ensureOpenAIClient();
-    if (!client) return [];
-    const joined = cotacoes
-      .map((c, i) => `### COTAÇÃO ${i + 1} (${c.name})\n${(c.text || "").slice(0, 20000)}`)
-      .join("\n\n");
-
-    const sys = `Você extrairá dados estruturados de cotações comerciais.
-Retorne um JSON com a lista "propostas", onde cada item possui:
-- selecao
-- ofertante
-- cnpj
-- dataCotacao (DD/MM/AAAA)
-- valor (número em reais).`.trim();
-
-    const resp = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: `A seguir estão os textos das cotações:\n\n${joined}\n\nExtraia os campos pedidos.` },
-      ],
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-    });
-
-    const json = JSON.parse(resp.choices[0].message.content || "{}");
-    if (!Array.isArray(json.propostas)) return [];
-    return json.propostas.slice(0, 10).map((p, idx) => ({
-      selecao:  p.selecao || `Cotação ${idx + 1}`,
-      ofertante:(p.ofertante || "").toString(),
-      cnpj:     (p.cnpj || "").toString(),
-      data:     fmtBRDate(p.dataCotacao || ""),
-      valor:    typeof p.valor === "string" && p.valor.includes("R$") ? p.valor : fmtBRL(p.valor),
-    }));
-  } catch (err) {
-    const code = err?.status || err?.statusCode || err?.code;
-    const msg  = String(err?.message || "").toLowerCase();
-    if (code === 401 || code === "401" || msg.includes("incorrect api key") || msg.includes("invalid api key")) {
-      invalidateOpenAIClient();
-    }
-    console.warn("[extractCotacoesWithAI] falhou, seguindo sem AI:", err?.message || err);
-    return [];
-  }
-}
-
 /* ==================== Router padrão ==================== */
 const router = express.Router();
 
@@ -410,71 +481,190 @@ router.post("/mapa-cotacao", async (req, res) => {
     // ✅ usar EXATAMENTE tipoRubrica
     const tipoRubrica     = (body?.tipoRubrica || "").toString().trim();
 
-    const objetoDesc      = body.objetoDescricao || payload.objeto || "";
+    let objetoDesc        = body.objetoDescricao || payload.objeto || "";
     const justBase        = body.justificativa || meta.justificativa || payload.justificativa || "";
     const dataPagamento   = fmtBRDate(body.dataPagamento || meta.dataPagamento || payload.dt_pagamento || "");
     const coordenadorNome = body.coordenadorNome || meta.coordenadorNome || "";
 
-    // ==================== propostas ====================
-    let propostas = Array.isArray(body.propostas) ? body.propostas : [];
+    // ==================== propostas e objeto ====================
+    const openaiClient = hasOpenAI ? ensureOpenAIClient() : null;
+    const cotacoesMap = new Map();
 
-    // 1) Se vieram NOMES dos arquivos no body.cotacoes (strings), extrai dos PDFs em data/uploads
-    if (!propostas.length && Array.isArray(body.cotacoes) && body.cotacoes.every(x => typeof x === "string")) {
-      try {
-        const fromFiles = await buildPropostasFromFilenames(body.cotacoes);
-        if (fromFiles.length) propostas = fromFiles;
-      } catch (e) {
-        console.warn("[mapa] buildPropostasFromFilenames falhou:", e?.message || e);
-      }
-    }
-
-    // 2) (Opcional) Se vierem OBJETOS com {name,text} em docs.cotacoes, tente IA
-    if (!propostas.length && Array.isArray(body?.docs?.cotacoes) && body.docs.cotacoes.length) {
-      try {
-        const parsed = await extractCotacoesWithAI(body.docs.cotacoes);
-        if (parsed.length) propostas = parsed;
-      } catch (e) {
-        console.warn("[mapa] extractCotacoesWithAI falhou:", e?.message || e);
-      }
-    }
-
-    // 3) Normalização final para o template
-    propostas = (propostas || []).map((p, i) => {
-      const cnpj = (p.cnpj || p.cnpj_ofertante || "").toString();
-      const data = fmtBRDate(p.data || p.data_cotacao || p.dataCotacao || "");
-      const valor = (typeof p.valor === "string" && p.valor.includes("R$")) ? p.valor : fmtBRL(p.valor);
-      return {
-        selecao: p.selecao || `Cotação ${i + 1}`,
-        ofertante: p.ofertante || p.fornecedor || "",
-        cnpj,                 // {cnpj}
-        cnpj_ofertante: cnpj, // alias {cnpj_ofertante}
-        data,                 // {data}
-        data_cotacao: data,   // alias {data_cotacao}
-        valor
-      };
-    });
-
-    // 4) Fallback: se ainda vazio, crie linhas para renderizar a tabela
-    if (!propostas.length) {
-      if (Array.isArray(body.cotacoes) && body.cotacoes.length) {
-        propostas = body.cotacoes.map((_, i) => ({
-          selecao: `Cotação ${i + 1}`,
-          ofertante: "",
-          cnpj_ofertante: "",
-          data_cotacao: "",
-          valor: ""
-        }));
+    const pushCotacao = (name, text) => {
+      const cleanName = String(name || "").trim() || `cotacao_${cotacoesMap.size + 1}`;
+      const key = cleanName.toLowerCase();
+      const entry = cotacoesMap.get(key);
+      if (entry) {
+        if (!entry.text && text) entry.text = text;
       } else {
-        propostas = [{ selecao:"—", ofertante:"—", cnpj_ofertante:"—", data_cotacao:"—", valor:"—" }];
+        cotacoesMap.set(key, { name: cleanName, text: String(text || "") });
       }
+    };
+
+    if (Array.isArray(body?.docs?.cotacoes)) {
+      body.docs.cotacoes.forEach((c, idx) => {
+        const name = c?.name || c?.filename || c?.fileName || c?.originalname || `cotacao_${idx + 1}`;
+        const text = String(c?.text || "");
+        pushCotacao(name, text);
+      });
+    }
+
+    if (Array.isArray(body.cotacoes) && body.cotacoes.length) {
+      const names = body.cotacoes.map((c, idx) => String(c || `cotacao_${idx + 1}`));
+      const texts = await Promise.all(names.map((name) => readPdfTextFromUploads(name).catch(() => "")));
+      names.forEach((name, idx) => {
+        pushCotacao(name, texts[idx] || "");
+      });
+    }
+
+    const cotacoesEntries = Array.from(cotacoesMap.values());
+    const sections = cotacoesEntries
+      .map((entry, idx) => {
+        const textSec = String(entry.text || "").trim();
+        if (!textSec) return "";
+        return `### COTAÇÃO ${idx + 1} (${entry.name})\n${textSec.slice(0, 20000)}`;
+      })
+      .filter(Boolean);
+
+    const listaCotacoesTexto = sections.join("\n\n");
+
+    const propostasManuais = Array.isArray(body.propostas) ? body.propostas : [];
+    let propostas = propostasManuais.map((p, idx) => normalizeProposal(p, idx)).filter(hasProposalData);
+
+    const avisosCotacao = Array.isArray(body.cotacoesAvisos) ? [...body.cotacoesAvisos] : [];
+
+    if (!objetoDesc) {
+      objetoDesc = body.objeto || meta.objeto || payload.objeto || "";
+    }
+
+    if (openaiClient && listaCotacoesTexto) {
+      try {
+        const analise = await extrairCotacoesDeTexto({
+          instituicao,
+          codigo_projeto: projetoCodigo || payload.projeto || "",
+          rubrica: tipoRubrica || "",
+          lista_cotacoes_texto: listaCotacoesTexto,
+        });
+
+        if (Array.isArray(analise?.avisos)) avisosCotacao.push(...analise.avisos);
+
+        if (!objetoDesc && analise?.objeto_rascunho) {
+          objetoDesc = String(analise.objeto_rascunho || "").trim();
+        }
+
+        const propostasIA = Array.isArray(analise?.propostas)
+          ? analise.propostas.map((p, idx) => normalizeProposal({
+              ...p,
+              cnpj: p?.cnpj ?? p?.cnpj_cpf ?? p?.cnpj_ofertante ?? "",
+              cnpj_ofertante: p?.cnpj ?? p?.cnpj_cpf ?? p?.cnpj_ofertante ?? "",
+              data_cotacao: p?.data_cotacao ?? p?.dataCotacao ?? "",
+              valor: typeof p?.valor === "number" ? fmtBRL(p.valor) : p?.valor,
+              valor_num: typeof p?.valor === "number" ? p.valor : parseValorToNumber(p?.valor),
+            }, idx)).filter(hasProposalData)
+          : [];
+
+        if (!propostas.length) {
+          propostas = propostasIA;
+        } else if (propostasIA.length) {
+          const merged = [];
+          const total = Math.max(propostas.length, propostasIA.length);
+          for (let i = 0; i < total; i++) {
+            const base = propostas[i];
+            const fallback = propostasIA[i];
+            if (base && fallback) {
+              merged.push(mergeProposalFields(base, fallback));
+            } else if (base) {
+              merged.push(base);
+            } else if (fallback) {
+              merged.push(fallback);
+            }
+          }
+          propostas = merged.filter(hasProposalData);
+        }
+      } catch (err) {
+        console.warn("[mapa] extrairCotacoesDeTexto falhou:", err?.message || err);
+      }
+    }
+
+    if (!propostas.length && cotacoesEntries.length) {
+      propostas = cotacoesEntries
+        .map((entry, idx) => {
+          const guess = guessFromText(entry.text);
+          return normalizeProposal({ selecao: `Cotação ${idx + 1}`, ...guess }, idx);
+        })
+        .filter(hasProposalData);
+    }
+
+    if (!propostas.length && cotacoesEntries.length) {
+      propostas = cotacoesEntries.map((_, idx) => normalizeProposal({}, idx));
+    }
+
+    ensureSelecionada(propostas);
+
+    const MIN_ROWS = 3;
+    while (propostas.length < MIN_ROWS) {
+      propostas.push(normalizeProposal({}, propostas.length));
+    }
+
+    const propostasForTemplate = propostas.map((p, idx) => ({
+      selecao: p.selecao || `Cotação ${idx + 1}`,
+      ofertante: p.ofertante || "",
+      cnpj: p.cnpj || p.cnpj_ofertante || "",
+      cnpj_ofertante: p.cnpj_ofertante || p.cnpj || "",
+      data: p.data_cotacao || p.data || "",
+      data_cotacao: p.data_cotacao || p.data || "",
+      valor: p.valor || "",
+    }));
+
+    const propostasParaLLM = propostas
+      .filter(hasProposalData)
+      .map((p) => ({
+        selecao: p.selecao,
+        ofertante: p.ofertante,
+        cnpj: p.cnpj || p.cnpj_ofertante || "",
+        dataCotacao: p.data_cotacao || "",
+        valor: p.valor || (Number.isFinite(p.valor_num) ? fmtBRL(p.valor_num) : ""),
+      }));
+
+    // ==================== textos finais ====================
+    const fallbackComplemento = "Seleção pautada pela melhor proposta e pelo custo-benefício, considerando conformidade técnica, prazos e valor.";
+    let justificativaFinal = String(justBase || "").trim();
+    let objetoFinal = String(objetoDesc || "").trim();
+    const localidade = body.localidade || meta.localidade || "Maceió";
+
+    if (openaiClient && propostasParaLLM.length) {
+      try {
+        const { objeto, justificativa: justAI } = await gerarObjetoEJustificativa({
+          instituicao,
+          projeto: projetoNome || "",
+          codigo_projeto: projetoCodigo || "",
+          rubrica: tipoRubrica || "",
+          justificativa_base: justificativaFinal,
+          json_propostas: JSON.stringify(propostasParaLLM, null, 2),
+          data_pagamento: dataPagamento || "",
+          localidade,
+        });
+        if (objeto) objetoFinal = objeto;
+        if (justAI) justificativaFinal = justAI;
+      } catch (err) {
+        console.warn("[mapa] gerarObjetoEJustificativa falhou:", err?.message || err);
+      }
+    }
+
+    if (!objetoFinal) objetoFinal = objetoDesc || "";
+    if (!objetoFinal) objetoFinal = "";
+
+    if (!justificativaFinal) {
+      justificativaFinal = fallbackComplemento;
+    } else if (!justificativaFinal.toLowerCase().includes("custo-benef")) {
+      const trimmed = justificativaFinal.trim().replace(/\s+/g, " " );
+      justificativaFinal = trimmed.replace(/([^.?!])$/, "$1.");
+      justificativaFinal += ` ${fallbackComplemento}`;
     }
 
     // ==================== rodapé ====================
     const hoje = dayjs();
-    const localData = `Maceió, ${hoje.format("DD")} de ${hoje.format("MMMM")} de ${hoje.format("YYYY")}`;
-    const complemento = " Seleção pautada pela melhor proposta e pelo custo-benefício, considerando conformidade técnica, prazo e valor.";
-    const justificativa = (justBase || "") + complemento;
-
+    const localData = `${localidade}, ${hoje.format("DD")} de ${hoje.format("MMMM")} de ${hoje.format("YYYY")}`;
     // ==================== renderização ====================
     const templateFile = pickMapaTemplate(instituicao);
     const templatePath = path.join(TPL_MAPA_DIR, templateFile);
@@ -493,12 +683,12 @@ router.post("/mapa-cotacao", async (req, res) => {
 
       // corpo
       natureza_disp:    tipoRubrica || "—",   // ✅ usa EXATAMENTE tipoRubrica
-      objeto:           objetoDesc || "—",
-      propostas,
+      objeto:           objetoFinal || "—",
+      propostas:        propostasForTemplate,
 
       // rodapé
       data_aquisicao:   dataPagamento || "—",
-      justificativa,
+      justificativa:    justificativaFinal || "—",
       local_data:       localData,
       coordenador_nome: coordenadorNome || "—",
     };
