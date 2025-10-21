@@ -2092,7 +2092,9 @@ form.addEventListener("submit", async (e) => {
       name: S(c.name || c.filename || c.fileName || "cotacao.pdf"),
       text: S(c.text || ""),
       url:  S(c.url  || c.link || ""),
-      path: S(c.path || "")
+      path: S(c.path || ""),
+      filename: S(c.filename || c.key || (S(c.url || "").startsWith("/uploads/") ? S(c.url || "").split("/").pop() : "")),
+      originalname: S(c.originalname || c.name || c.fileName || "")
     }));
   }
 
@@ -2253,6 +2255,25 @@ form.addEventListener("submit", async (e) => {
 
     // Coleta anexos de cotação vistos na UI (coluna Documentação)
     const cotacoesSlim = pickCotacoesFromRow(row);
+    const cotacoesUploads = Array.isArray(row?.docs?.cotacoes) ? row.docs.cotacoes : [];
+    const cotacaoFileNames = cotacoesUploads
+      .map((entry) => {
+        const raw = S(entry?.filename || entry?.key || "") || S(entry?.url || "");
+        const cleaned = raw
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split("/")
+          .pop();
+        if (cleaned) return cleaned;
+        const fallback = S(entry?.name || entry?.originalname || "")
+          .split(/[\\/]/)
+          .pop()
+          .trim();
+        return fallback;
+      })
+      .map((name) => S(name).replace(/^\/+/, "").trim())
+      .filter(Boolean);
 
     // Propostas preenchidas manualmente (se houver na linha)
     let propostasEstr = Array.isArray(row?.propostas) ? clonePropostas(row.propostas) : [];
@@ -2346,6 +2367,7 @@ form.addEventListener("submit", async (e) => {
 
     // Sempre mande 'propostas' (mesmo vazia) para o loop do template
     payload.propostas = propostas;
+    if (cotacaoFileNames.length) payload.cotacoes = cotacaoFileNames;
     if (Array.isArray(row.cotacoes_avisos) && row.cotacoes_avisos.length) {
       payload.cotacoesAvisos = cloneAvisos(row.cotacoes_avisos);
     }

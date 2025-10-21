@@ -169,25 +169,6 @@
             </div>
           </div>
 
-          <div class="field">
-            <label>Folha de Rosto Assinada (PDF/Imagem)</label>
-            <div class="upload-row">
-              <input id="folhaAssinadaInput" class="hidden-file" type="file" accept="application/pdf,image/*" />
-              <button class="btn" type="button" data-pick="#folhaAssinadaInput">Enviar</button>
-              <a id="md-folha-ass-link" class="muted" hidden target="_blank" rel="noopener">abrir arquivo</a>
-            </div>
-            <div id="hint-folha-ass" class="muted tiny"></div>
-          </div>
-
-          <div class="field">
-            <label>Documento de decisão assinado</label>
-            <div class="upload-row">
-              <input id="decisaoAssinadaInput" class="hidden-file" type="file" accept="application/pdf,image/*" />
-              <button class="btn" type="button" data-pick="#decisaoAssinadaInput">Enviar</button>
-              <a id="md-decisao-ass-link" class="muted" hidden target="_blank" rel="noopener">abrir arquivo</a>
-            </div>
-            <small class="tiny muted">Aceita o Mapa de Cotação assinado ou a Justificativa para Dispensa assinada.</small>
-          </div>
         </div>
 
         <!-- ÚNICO botão "Adicionar à tabela" -->
@@ -297,6 +278,33 @@
       <section>
         <h3 class="block-subtitle">Documentação enviada</h3>
         <div id="md-docs" class="muted tiny">Sem documentos anexados.</div>
+      </section>
+
+      <div class="divider"></div>
+
+      <section>
+        <h3 class="block-subtitle">Documentos assinados</h3>
+        <div class="grid grid--2">
+          <div class="field">
+            <label>Folha de Rosto Assinada (PDF/Imagem)</label>
+            <div class="upload-row">
+              <input id="folhaAssinadaInput" class="hidden-file" type="file" accept="application/pdf,image/*" />
+              <button class="btn" type="button" data-pick="#folhaAssinadaInput">Enviar</button>
+              <a id="md-folha-ass-link" class="muted" hidden target="_blank" rel="noopener">abrir arquivo</a>
+            </div>
+            <div id="hint-folha-ass" class="muted tiny"></div>
+          </div>
+
+          <div class="field">
+            <label>Documento de decisão assinado</label>
+            <div class="upload-row">
+              <input id="decisaoAssinadaInput" class="hidden-file" type="file" accept="application/pdf,image/*" />
+              <button class="btn" type="button" data-pick="#decisaoAssinadaInput">Enviar</button>
+              <a id="md-decisao-ass-link" class="muted" hidden target="_blank" rel="noopener">abrir arquivo</a>
+            </div>
+            <small class="tiny muted">Aceita o Mapa de Cotação assinado ou a Justificativa para Dispensa assinada.</small>
+          </div>
+        </div>
       </section>
 
       <div class="modal__actions row" style="gap:12px;align-items:center;justify-content:flex-start;">

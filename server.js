@@ -1,5 +1,5 @@
 // server.js — ESM (entrypoint único)
-import "dotenv/config";
+import "./src/envLoader.js";
 import express, { Router } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -962,6 +962,18 @@ async function ensureCotacoesText(cotacoes = []) {
       if (!buf && c && typeof c === "object" && c?.path && fs.existsSync(c.path)) {
         try { buf = fs.readFileSync(c.path); } catch {}
       }
+      if (!buf && c && typeof c === "object" && c?.filename) {
+        const clean = String(c.filename)
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split(/[\\/]/)
+          .pop();
+        if (clean) {
+          const p = join(process.cwd(), "data", "uploads", clean);
+          if (fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
+        }
+      }
       if (!buf && url) {
         try {
           const base = `http://localhost:${process.env.PORT || 3000}`;
@@ -974,8 +986,14 @@ async function ensureCotacoesText(cotacoes = []) {
         } catch {}
       }
       if (!buf && typeof c === "string") {
-        const p = join(process.cwd(), "data", "uploads", c);
-        if (fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
+        const clean = String(c)
+          .replace(/^https?:\/\/[^/]+\//i, "")
+          .replace(/^uploads\//i, "")
+          .replace(/^\/+/, "")
+          .split(/[\\/]/)
+          .pop();
+        const p = clean ? join(process.cwd(), "data", "uploads", clean) : null;
+        if (p && fs.existsSync(p)) { try { buf = fs.readFileSync(p); } catch {} }
       }
       if (buf) text = await pdfToTextFromBuffer(buf);
     }

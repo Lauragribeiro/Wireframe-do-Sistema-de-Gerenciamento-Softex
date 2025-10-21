@@ -193,7 +193,11 @@ function buildDateExtenso(localidade = "", iso = "", dia = "", mes = "", ano = "
 // Lê texto de /data/uploads/<fileName>
 async function readPdfTextFromUploads(fileName) {
   try {
-    const full = path.join(__dirnameLocal, "data", "uploads", String(fileName));
+    const raw = String(fileName || "").trim();
+    if (!raw) return "";
+    const clean = path.basename(raw.replace(/\\/g, "/"));
+    if (!clean) return "";
+    const full = path.join(__dirnameLocal, "data", "uploads", clean);
     if (!fs.existsSync(full)) return "";
     const buf = fs.readFileSync(full);
     const pdfParse = (await import("pdf-parse")).default; // import dinâmico (ESM-friendly)
