@@ -12,8 +12,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const cronInicio = $("#cron-inicio"), cronFim = $("#cron-fim"), qtdMetas = $("#qtd-metas");
   const inputCron = $("#file-cronograma");
   const tbody = $("#tbl-evidencias tbody");
-  const tabEvid = $("#tab-evidencias");
-  const tabDoc  = $("#tab-docfin");
+  const tabEvid   = $("#tab-evidencias");
+  const tabDoc    = $("#tab-docfin");
+  const tabBolsas = $("#tab-bolsas");
 
   // ===== State
   let project = null;
@@ -188,6 +189,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const qs = projectId ? `?id=${encodeURIComponent(projectId)}` : "";
     tabEvid.href = `/prestacao.html${qs}`;
     tabDoc.href  = `/docfin.html${qs}`; // próxima página
+    if (tabBolsas) tabBolsas.href = `/bolsas.html${qs}`;
     tabEvid.classList.add("active");
   }
 
