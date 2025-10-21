@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles/styles.css" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 </head>
-<body>
+<body class="dashboard-page">
   <!-- ===== Topbar fixa ===== -->
   <header class="header">
     <div class="header-logo">
@@ -17,93 +17,114 @@
     <nav class="header-nav">
       <a href="/dashboard" class="nav-link active">Painel de Projetos</a>
       <a href="/login" class="nav-link">Login</a>
-      <button class="new-project-btn" id="btn-open-modal">+Novo Projeto</button>
     </nav>
   </header>
 
   <!-- ===== Conteúdo ===== -->
-  <main class="container">
-    <div class="dashboard-header">
-      <h1>Projetos</h1>
-      <input type="text" id="project-search" placeholder="Buscar por nome ou código..." />
-    </div>
+  <main class="dashboard-shell">
+    <section class="dashboard-hero">
+      <div class="dashboard-hero__info">
+        <span class="dashboard-hero__eyebrow">Painel de Projetos</span>
+        <h1 class="dashboard-hero__title">Projetos</h1>
+        <p class="dashboard-hero__subtitle">
+          Acompanhe os contratos ativos, atualize dados e acesse a prestação de contas em poucos cliques.
+        </p>
+      </div>
+      <div class="dashboard-hero__actions">
+        <div class="search-field">
+          <span class="search-field__icon" aria-hidden="true">🔍</span>
+          <input type="text" id="project-search" placeholder="Buscar por nome ou código..." aria-label="Buscar projetos" />
+        </div>
+        <button class="btn btn-primary" id="btn-open-modal">+ Novo Projeto</button>
+      </div>
+    </section>
 
-    <div class="filters">
-      <button class="filter-btn active" data-filter="all">Todos</button>
-      <button class="filter-btn" data-filter="em_andamento">Em andamento</button>
-      <button class="filter-btn" data-filter="finalizado">Finalizado</button>
-      <button class="filter-btn" data-filter="pendente">Pendente</button>
-    </div>
-<!-- Modal: Editar Projeto -->
-<dialog id="project-edit-modal" class="modal">
-  <form id="project-edit-form" method="dialog" class="modal__content" style="max-width:720px;">
-    <div class="modal__header">
-      <h2>Editar projeto</h2>
-      <button type="button" class="icon-btn" id="project-edit-close" aria-label="Fechar">✕</button>
-    </div>
+    <section class="dashboard-filters" aria-label="Filtrar projetos por status">
+      <h2 class="dashboard-filters__title">Filtrar por status</h2>
+      <div class="filter-group" role="toolbar">
+        <button class="filter-btn active" data-filter="all" type="button">Todos</button>
+        <button class="filter-btn" data-filter="em_andamento" type="button">Em andamento</button>
+        <button class="filter-btn" data-filter="finalizado" type="button">Finalizado</button>
+        <button class="filter-btn" data-filter="pendente" type="button">Pendente</button>
+      </div>
+    </section>
 
-    <input type="hidden" name="id" id="pe-id" />
+    <section class="projects-section">
+      <header class="projects-section__head">
+        <h2 class="projects-section__title">Projetos cadastrados</h2>
+        <p class="projects-section__subtitle">Visualize o andamento e edite as informações de cada iniciativa.</p>
+      </header>
+      <div id="projects-grid" class="projects-grid"></div>
+      <p id="empty-state" class="empty" hidden>Nenhum projeto encontrado.</p>
+    </section>
 
-    <div class="form-grid">
-      <label class="field span-2">
-        <span>Título</span>
-        <input type="text" name="titulo" id="pe-titulo" required />
-      </label>
+    <!-- Modal: Editar Projeto -->
+    <dialog id="project-edit-modal" class="modal">
+      <form id="project-edit-form" method="dialog" class="modal__content">
+        <div class="modal__header">
+          <h2>Editar projeto</h2>
+          <button type="button" class="icon-btn" id="project-edit-close" aria-label="Fechar">✕</button>
+        </div>
 
-      <label class="field">
-        <span>Código</span>
-        <input type="text" name="codigo" id="pe-codigo" />
-      </label>
+        <input type="hidden" name="id" id="pe-id" />
 
-      <label class="field">
-        <span>Status</span>
-        <select name="status" id="pe-status">
-          <option value="em_andamento">Em andamento</option>
-          <option value="finalizado">Finalizado</option>
-          <option value="pendente">Pendente</option>
-        </select>
-      </label>
+        <div class="form-grid">
+          <label class="field span-2">
+            <span>Título</span>
+            <input type="text" name="titulo" id="pe-titulo" required />
+          </label>
 
-      <label class="field">
-        <span>Vigência (início)</span>
-        <input type="month" name="vigenciaInicio" id="pe-vigini" />
-      </label>
+          <label class="field">
+            <span>Código</span>
+            <input type="text" name="codigo" id="pe-codigo" />
+          </label>
 
-      <label class="field">
-        <span>Vigência (fim)</span>
-        <input type="month" name="vigenciaFim" id="pe-vigfim" />
-      </label>
+          <label class="field">
+            <span>Status</span>
+            <select name="status" id="pe-status">
+              <option value="em_andamento">Em andamento</option>
+              <option value="finalizado">Finalizado</option>
+              <option value="pendente">Pendente</option>
+            </select>
+          </label>
 
-      <label class="field">
-        <span>Instituição</span>
-        <select name="instituicao" id="pe-inst">
-          <option value="EDGE">EDGE</option>
-          <option value="VERTEX">VERTEX</option>
-        </select>
-      </label>
+          <label class="field">
+            <span>Vigência (início)</span>
+            <input type="month" name="vigenciaInicio" id="pe-vigini" />
+          </label>
 
-      <label class="field">
-        <span>Gerente</span>
-        <input type="text" name="gerente" id="pe-gerente" />
-      </label>
+          <label class="field">
+            <span>Vigência (fim)</span>
+            <input type="month" name="vigenciaFim" id="pe-vigfim" />
+          </label>
 
-      <label class="field">
-        <span>Coordenador</span>
-        <input type="text" name="coordenador" id="pe-coordenador" />
-      </label>
-    </div>
+          <label class="field">
+            <span>Instituição</span>
+            <select name="instituicao" id="pe-inst">
+              <option value="EDGE">EDGE</option>
+              <option value="VERTEX">VERTEX</option>
+            </select>
+          </label>
 
-    <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 16px;">
-      <button type="button" class="btn" id="project-delete">Excluir projeto</button>
-      <button type="button" class="btn" id="project-cancel">Cancelar</button>
-      <button type="submit" class="btn btn-primary" id="project-save">Salvar alterações</button>
-    </div>
-  </form>
-</dialog>
+          <label class="field">
+            <span>Gerente</span>
+            <input type="text" name="gerente" id="pe-gerente" />
+          </label>
 
-     <div id="projects-grid" class="projects-grid"></div>
-       <p id="empty-state" class="empty" hidden>Nenhum projeto encontrado.</p>
-</main>
+          <label class="field">
+            <span>Coordenador</span>
+            <input type="text" name="coordenador" id="pe-coordenador" />
+          </label>
+        </div>
+
+        <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 16px;">
+          <button type="button" class="btn" id="project-delete">Excluir projeto</button>
+          <button type="button" class="btn btn-ghost" id="project-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="project-save">Salvar alterações</button>
+        </div>
+      </form>
+    </dialog>
+  </main>
   <!-- ===== Modal Novo Projeto ===== -->
   <dialog id="project-modal" class="modal">
     <form id="project-form" method="dialog" class="modal__content">
