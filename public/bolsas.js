@@ -744,13 +744,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   modal?.addEventListener('click', (ev) => {
     const content = modal.querySelector('.modal__content');
     if (!content) return;
-    const rect = content.getBoundingClientRect();
-    if (
-      ev.clientX < rect.left ||
-      ev.clientX > rect.right ||
-      ev.clientY < rect.top ||
-      ev.clientY > rect.bottom
-    ) {
+    if (!content.contains(ev.target)) {
       closeModal();
     }
   });
