@@ -1572,6 +1572,7 @@ function toggleButtons(tr, map) {
 
       $("#tab-evidencias")?.setAttribute("href", `/prestacao.html?id=${encodeURIComponent(projectId)}`);
       $("#tab-docfin")?.setAttribute("href", `/docfin.html?id=${encodeURIComponent(projectId)}`);
+      $("#tab-bolsas")?.setAttribute("href", `/bolsas.html?id=${encodeURIComponent(projectId)}`);
 
       try {
         const rr = await fetch(`/api/purchases?projectId=${encodeURIComponent(projectId)}`);
