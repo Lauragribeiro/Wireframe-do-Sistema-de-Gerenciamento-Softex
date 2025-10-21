@@ -665,6 +665,10 @@ app.use((req, _res, next) => {
 app.use(express.static(PUB()));
 app.use("/styles",  express.static(join(__dirname, "styles")));
 app.use("/src",     express.static(join(__dirname, "src")));
+app.use(
+  "/vendor/pdfjs",
+  express.static(join(__dirname, "node_modules", "pdfjs-dist", "build"))
+);
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 /* ========================================================================== *

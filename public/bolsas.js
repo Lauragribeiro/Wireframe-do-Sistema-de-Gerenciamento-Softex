@@ -85,6 +85,60 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  const PDF_JS_SRC = '/vendor/pdfjs/pdf.min.js';
+  const PDF_WORKER_SRC = '/vendor/pdfjs/pdf.worker.min.js';
+
+  const ensurePdfReaderLoaded = (() => {
+    let loading = null;
+    return async () => {
+      if (typeof window === 'undefined' || typeof document === 'undefined') {
+        throw new Error('Leitura de PDF não suportada neste ambiente.');
+      }
+
+      const existingLib = window.pdfjsLib;
+      if (existingLib?.GlobalWorkerOptions) {
+        existingLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
+        return existingLib;
+      }
+
+      if (loading) {
+        return loading;
+      }
+
+      loading = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = PDF_JS_SRC;
+        script.async = true;
+        script.dataset.pdfjsLoader = 'true';
+
+        script.onload = () => {
+          const lib = window.pdfjsLib;
+          if (lib?.GlobalWorkerOptions) {
+            lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
+            resolve(lib);
+          } else {
+            reject(new Error('Biblioteca PDF.js não disponível após o carregamento.'));
+          }
+        };
+
+        script.onerror = () => {
+          reject(new Error('Não foi possível carregar o leitor de PDF.'));
+        };
+
+        document.head.appendChild(script);
+      }).catch((err) => {
+        loading = null;
+        throw err;
+      });
+
+      return loading;
+    };
+  })();
+
+  ensurePdfReaderLoaded().catch((err) => {
+    console.warn('Não foi possível preparar o leitor de PDF imediatamente:', err);
+  });
+
   const escapeHtml = (t = '') => String(t).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
     '<': '&lt;',
@@ -236,10 +290,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (!/pdf$/i.test(file.type) && !file.name.toLowerCase().endsWith('.pdf')) {
       throw new Error('Apenas arquivos PDF são aceitos.');
     }
-    if (!window.pdfjsLib) throw new Error('Leitor de PDF não carregado.');
+
+    const pdfjsLib = await ensurePdfReaderLoaded();
 
     const buffer = await file.arrayBuffer();
-    const pdf = await window.pdfjsLib.getDocument({ data: buffer }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
     let fullText = '';
     for (let page = 1; page <= pdf.numPages; page += 1) {
       // eslint-disable-next-line no-await-in-loop
