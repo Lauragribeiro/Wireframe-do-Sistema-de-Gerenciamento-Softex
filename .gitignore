@@ -1,0 +1,2 @@
+# Arquivos de ambiente local (contém variáveis e chaves secretas)
+.env
