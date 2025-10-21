@@ -101,39 +101,59 @@ document.addEventListener("DOMContentLoaded", () => {
     return `${f(a)} - ${f(b)}`;
   };
 
-  const badge = (s) => {
+  const badge = (status) => {
     const map = {
-      em_andamento: { t: "Em andamento", cls: "badge badge--warn" },
-      finalizado:   { t: "Finalizado",   cls: "badge badge--ok" },
-      pendente:     { t: "Pendente",     cls: "badge badge--neutral" },
+      em_andamento: { label: "Em andamento", cls: "project-card__status--em_andamento" },
+      finalizado:   { label: "Finalizado",   cls: "project-card__status--finalizado" },
+      pendente:     { label: "Pendente",     cls: "project-card__status--pendente" },
     };
-    const it = map[s] || map.pendente;
-    return `<span class="${it.cls}">${it.t}</span>`;
+    const it = map[status] || map.pendente;
+    return `<span class="project-card__status ${it.cls}">${it.label}</span>`;
   };
 
-  const card = (p) => `
-    <article class="card" data-id="${esc(p.id)}">
-      <div class="card__header">
-        <h3 class="card__title">${esc(p.titulo)}</h3>
-        <span class="card__code">${esc(p.codigo || p.id)}</span>
-      </div>
-      <div class="card__meta">
-        <div><strong>Vigência:</strong> ${esc(fmtVig(p.vigenciaInicio, p.vigenciaFim))}</div>
-        <div><strong>Responsável:</strong> ${esc(p.responsavel || p.gerente || "")}</div>
-      </div>
-      <div class="card__footer">
-        ${badge(p.status)}
-        <div class="row" style="gap:8px;">
-          <a class="btn btn-outline" href="/prestacao.html?id=${encodeURIComponent(p.id)}">
-            Acessar Prestação de Contas
-          </a>
-          <button type="button" class="btn btn-secondary btn-edit" data-id="${esc(p.id)}">
-            Editar
-          </button>
-        </div>
-      </div>
-    </article>
-  `;
+  const card = (p) => {
+    const vigencia = esc(fmtVig(p.vigenciaInicio, p.vigenciaFim)) || "—";
+    const instituicao = esc(p.instituicao || "—");
+    const responsavel = esc(p.responsavel || p.gerente || "—");
+
+    return `
+      <article class="project-card" data-id="${esc(p.id)}">
+        <header class="project-card__header">
+          <div class="project-card__heading">
+            <h3 class="project-card__title">${esc(p.titulo)}</h3>
+            <span class="project-card__code">${esc(p.codigo || p.id)}</span>
+          </div>
+          ${badge(p.status)}
+        </header>
+        <dl class="project-card__meta">
+          <div>
+            <dt>Vigência</dt>
+            <dd>${vigencia}</dd>
+          </div>
+          <div>
+            <dt>Instituição</dt>
+            <dd>${instituicao}</dd>
+          </div>
+          <div>
+            <dt>Responsável</dt>
+            <dd>${responsavel}</dd>
+          </div>
+        </dl>
+        <footer class="project-card__footer">
+          <div class="project-card__actions">
+            <a class="btn btn-primary project-card__primary" href="/prestacao.html?id=${encodeURIComponent(p.id)}">
+              Acessar prestação de contas
+            </a>
+            <div class="project-card__secondary">
+              <button type="button" class="btn btn-ghost btn-edit" data-id="${esc(p.id)}">
+                Editar detalhes
+              </button>
+            </div>
+          </div>
+        </footer>
+      </article>
+    `;
+  };
 
   const applyFilters = (arr) => {
     const t = (term || "").trim().toLowerCase();
