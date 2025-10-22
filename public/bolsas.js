@@ -85,59 +85,34 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const PDF_JS_SRC = '/vendor/pdfjs/pdf.min.js';
-  const PDF_WORKER_SRC = '/vendor/pdfjs/pdf.worker.min.js';
+  const requestTermoAnalysis = async (file) => {
+    const fd = new FormData();
+    fd.append('termo', file);
 
-  const ensurePdfReaderLoaded = (() => {
-    let loading = null;
-    return async () => {
-      if (typeof window === 'undefined' || typeof document === 'undefined') {
-        throw new Error('Leitura de PDF não suportada neste ambiente.');
-      }
+    let response;
+    try {
+      response = await fetch('/api/parse-termo-outorga', { method: 'POST', body: fd });
+    } catch (err) {
+      console.error('Falha na requisição de análise do termo:', err);
+      throw new Error('Não foi possível enviar o termo para análise. Verifique sua conexão e tente novamente.');
+    }
 
-      const existingLib = window.pdfjsLib;
-      if (existingLib?.GlobalWorkerOptions) {
-        existingLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
-        return existingLib;
-      }
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      const text = await response.text().catch(() => '');
+      console.error('Resposta inesperada ao analisar termo:', err, text);
+      throw new Error('Resposta inválida do servidor ao analisar o termo de outorga.');
+    }
 
-      if (loading) {
-        return loading;
-      }
+    if (!response.ok || !payload?.ok) {
+      const message = payload?.message || `Erro ao processar o termo (HTTP ${response.status}).`;
+      throw new Error(message);
+    }
 
-      loading = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = PDF_JS_SRC;
-        script.async = true;
-        script.dataset.pdfjsLoader = 'true';
-
-        script.onload = () => {
-          const lib = window.pdfjsLib;
-          if (lib?.GlobalWorkerOptions) {
-            lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
-            resolve(lib);
-          } else {
-            reject(new Error('Biblioteca PDF.js não disponível após o carregamento.'));
-          }
-        };
-
-        script.onerror = () => {
-          reject(new Error('Não foi possível carregar o leitor de PDF.'));
-        };
-
-        document.head.appendChild(script);
-      }).catch((err) => {
-        loading = null;
-        throw err;
-      });
-
-      return loading;
-    };
-  })();
-
-  ensurePdfReaderLoaded().catch((err) => {
-    console.warn('Não foi possível preparar o leitor de PDF imediatamente:', err);
-  });
+    return payload?.data || {};
+  };
 
   const escapeHtml = (t = '') => String(t).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
@@ -291,26 +266,24 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       throw new Error('Apenas arquivos PDF são aceitos.');
     }
 
-    const pdfjsLib = await ensurePdfReaderLoaded();
+    const remoteData = await requestTermoAnalysis(file);
+    const rawText = remoteData.rawText || remoteData.text || '';
 
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-    let fullText = '';
-    for (let page = 1; page <= pdf.numPages; page += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const pageData = await pdf.getPage(page);
-      // eslint-disable-next-line no-await-in-loop
-      const content = await pageData.getTextContent();
-      const text = content.items.map((item) => item.str || '').join(' ');
-      fullText += `\n${text}`;
+    let parsed = null;
+    if (remoteData.parsed && typeof remoteData.parsed === 'object') {
+      parsed = { ...remoteData.parsed };
     }
 
-    const parsed = analyseTermoText(fullText);
+    if (rawText && (!parsed || (!parsed.vigenciaISO && parsed.valorMaximo == null))) {
+      const fallback = analyseTermoText(rawText);
+      parsed = { ...fallback, ...(parsed || {}) };
+    }
+
     return {
-      fileName: file.name,
-      size: file.size,
+      fileName: remoteData.fileName || file.name,
+      size: remoteData.size ?? file.size,
       parsed,
-      rawText: fullText,
+      rawText,
     };
   };
 
