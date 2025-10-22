@@ -475,15 +475,18 @@ async function normalizePurchaseInput(body = {}, fallbackProjectId = "", opts = 
 
   const docs = normalizeDocs(body);
 
-  const objetoBase = toStringSafe(
+  let objetoBase = toStringSafe(
     body.objeto ??
     body.objetoDescricao ??
     body.cotacaoObjeto ??
+    body.cotacoes_objeto ??
     body.objeto_cotacao ??
+    body.objeto_rascunho ??
     body.objetoMapa ??
     body.objetoDescricaoMapa ??
     ""
   );
+  if (/^na[oã] informado$/i.test(objetoBase)) objetoBase = "";
   const propostasList = parsePropostasList(body);
   const cotAvisosSrc = body.cotacoesAvisos ?? body.cotacoes_avisos;
   const cotacoesAvisos = Array.isArray(cotAvisosSrc)

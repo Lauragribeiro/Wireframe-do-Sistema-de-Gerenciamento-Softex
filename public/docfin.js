@@ -2058,7 +2058,10 @@ form.addEventListener("submit", async (e) => {
     return `${dd}/${mm}/${yy}`;
   }
   function normalizeObjeto(val){
-    return val == null ? "" : String(val).trim();
+    if (val == null) return "";
+    const txt = String(val).trim();
+    if (!txt) return "";
+    return /^na[oã] informado$/i.test(txt) || txt === "—" ? "" : txt;
   }
   function toBRL(v){
     if (v == null || v === "") return "";
@@ -2329,7 +2332,7 @@ form.addEventListener("submit", async (e) => {
       row.objetoDescricao ||
       lastParsedDocs?.cotacoes_objeto ||
       ""
-    ) || "Não informado";
+    ) || "";
 
     const payload = {
       instituicao:   S(proj.instituicao || "EDGE"),
@@ -2415,7 +2418,7 @@ form.addEventListener("submit", async (e) => {
       row.objetoDescricao ||
       lastParsedDocs?.cotacoes_objeto ||
       ""
-    ) || "Não informado";
+    ) || "";
 
     const dtPg = row.dataPagamento || "";
     const baseDate = dtPg ? new Date(dtPg) : new Date();
