@@ -907,6 +907,55 @@ function renderDocxFromTemplate(templateRelPath, data, forceDelims = "auto") {
   }
 }
 
+function normalizeDocxPlaceholders(xml) {
+  if (!xml || typeof xml !== "string" || !xml.includes("{")) return xml;
+
+  const len = xml.length;
+  let result = "";
+  let i = 0;
+
+  while (i < len) {
+    const ch = xml[i];
+    if (ch === "{") {
+      let raw = "";
+      let openCount = 0;
+      let closeCount = 0;
+      let j = i;
+      let insideTag = false;
+
+      while (j < len) {
+        const current = xml[j];
+        raw += current;
+
+        if (current === "<") insideTag = true;
+        else if (current === ">") insideTag = false;
+        else if (!insideTag) {
+          if (current === "{") openCount += 1;
+          else if (current === "}") closeCount += 1;
+        }
+
+        j += 1;
+        if (openCount >= 2 && closeCount >= 2) break;
+      }
+
+      if (openCount >= 2 && closeCount >= 2) {
+        const plain = raw.replace(/<[^>]+>/g, "");
+        const inner = plain.slice(2, -2).replace(/\s+/g, " ").trim();
+        if (inner) {
+          result += `{{${inner}}}`;
+          i = j;
+          continue;
+        }
+      }
+    }
+
+    result += ch;
+    i += 1;
+  }
+
+  return result;
+}
+
 /* ===================== Helpers (formatação PT-BR) ===================== */
 function fmtBRDate(s) {
   if (!s) return "";
