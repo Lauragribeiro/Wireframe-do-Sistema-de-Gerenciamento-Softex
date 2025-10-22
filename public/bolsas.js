@@ -85,102 +85,34 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const PDF_SOURCES = [
-    {
-      script: '/vendor/pdfjs/pdf.min.js',
-      worker: '/vendor/pdfjs/pdf.worker.min.js',
-    },
-    {
-      script: 'https://unpkg.com/pdfjs-dist@5.4.149/build/pdf.min.js',
-      worker: 'https://unpkg.com/pdfjs-dist@5.4.149/build/pdf.worker.min.js',
-    },
-  ];
+  const requestTermoAnalysis = async (file) => {
+    const fd = new FormData();
+    fd.append('termo', file);
 
-  const ensurePdfReaderLoaded = (() => {
-    let loading = null;
-    let chosenWorker = PDF_SOURCES[0].worker;
+    let response;
+    try {
+      response = await fetch('/api/parse-termo-outorga', { method: 'POST', body: fd });
+    } catch (err) {
+      console.error('Falha na requisição de análise do termo:', err);
+      throw new Error('Não foi possível enviar o termo para análise. Verifique sua conexão e tente novamente.');
+    }
 
-    const setWorkerSrc = (lib, workerSrc) => {
-      if (!lib?.GlobalWorkerOptions) {
-        throw new Error('Biblioteca PDF.js carregada sem configurações de worker.');
-      }
-      lib.GlobalWorkerOptions.workerSrc = workerSrc;
-    };
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      const text = await response.text().catch(() => '');
+      console.error('Resposta inesperada ao analisar termo:', err, text);
+      throw new Error('Resposta inválida do servidor ao analisar o termo de outorga.');
+    }
 
-    const loadFromSource = ({ script, worker }) => new Promise((resolve, reject) => {
-      const tag = document.createElement('script');
-      tag.src = script;
-      tag.async = true;
-      tag.dataset.pdfjsLoader = script;
+    if (!response.ok || !payload?.ok) {
+      const message = payload?.message || `Erro ao processar o termo (HTTP ${response.status}).`;
+      throw new Error(message);
+    }
 
-      tag.onload = () => {
-        try {
-          const lib = window.pdfjsLib;
-          if (!lib) {
-            throw new Error('Biblioteca PDF.js não disponível após o carregamento.');
-          }
-          setWorkerSrc(lib, worker);
-          chosenWorker = worker;
-          resolve(lib);
-        } catch (err) {
-          reject(err);
-        }
-      };
-
-      tag.onerror = () => {
-        tag.remove();
-        reject(new Error(`Falha ao carregar PDF.js de ${script}.`));
-      };
-
-      document.head.appendChild(tag);
-    });
-
-    const loadPdfJs = async () => {
-      const errors = [];
-      for (const source of PDF_SOURCES) {
-        try {
-          return await loadFromSource(source);
-        } catch (err) {
-          errors.push(err);
-        }
-      }
-
-      if (errors.length) {
-        console.error('Falha ao carregar o leitor de PDF. Tentativas realizadas:', errors.map((e) => e?.message || e));
-      }
-
-      throw new Error('Não foi possível carregar o leitor de PDF. Verifique sua conexão ou tente novamente mais tarde.');
-    };
-
-    return async () => {
-      if (typeof window === 'undefined' || typeof document === 'undefined') {
-        throw new Error('Leitura de PDF não suportada neste ambiente.');
-      }
-
-      const existingLib = window.pdfjsLib;
-      if (existingLib?.GlobalWorkerOptions) {
-        try {
-          setWorkerSrc(existingLib, chosenWorker);
-          return existingLib;
-        } catch (err) {
-          console.warn('PDF.js disponível, mas não foi possível configurar o worker:', err);
-        }
-      }
-
-      if (!loading) {
-        loading = loadPdfJs().catch((err) => {
-          loading = null;
-          throw err;
-        });
-      }
-
-      return loading;
-    };
-  })();
-
-  ensurePdfReaderLoaded().catch((err) => {
-    console.warn('Não foi possível preparar o leitor de PDF imediatamente:', err);
-  });
+    return payload?.data || {};
+  };
 
   const escapeHtml = (t = '') => String(t).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
@@ -334,26 +266,24 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       throw new Error('Apenas arquivos PDF são aceitos.');
     }
 
-    const pdfjsLib = await ensurePdfReaderLoaded();
+    const remoteData = await requestTermoAnalysis(file);
+    const rawText = remoteData.rawText || remoteData.text || '';
 
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-    let fullText = '';
-    for (let page = 1; page <= pdf.numPages; page += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const pageData = await pdf.getPage(page);
-      // eslint-disable-next-line no-await-in-loop
-      const content = await pageData.getTextContent();
-      const text = content.items.map((item) => item.str || '').join(' ');
-      fullText += `\n${text}`;
+    let parsed = null;
+    if (remoteData.parsed && typeof remoteData.parsed === 'object') {
+      parsed = { ...remoteData.parsed };
     }
 
-    const parsed = analyseTermoText(fullText);
+    if (rawText && (!parsed || (!parsed.vigenciaISO && parsed.valorMaximo == null))) {
+      const fallback = analyseTermoText(rawText);
+      parsed = { ...fallback, ...(parsed || {}) };
+    }
+
     return {
-      fileName: file.name,
-      size: file.size,
+      fileName: remoteData.fileName || file.name,
+      size: remoteData.size ?? file.size,
       parsed,
-      rawText: fullText,
+      rawText,
     };
   };
 

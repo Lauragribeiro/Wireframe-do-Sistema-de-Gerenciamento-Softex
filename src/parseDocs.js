@@ -52,6 +52,13 @@ const runMulter = (req, res) => new Promise((resolve, reject) => {
   });
 });
 
+const runSingleTermo = (req, res) => new Promise((resolve, reject) => {
+  upload.single("termo")(req, res, (err) => {
+    if (err) reject(err);
+    else resolve();
+  });
+});
+
 function normalizeIncomingFile(file) {
   if (!file) return null;
 
@@ -420,6 +427,94 @@ function parseMoneyToNumber(value) {
     .replace(",", ".");
   const num = Number(str);
   return Number.isFinite(num) ? num : null;
+}
+
+function collectMatches(regex, text) {
+  if (!(regex instanceof RegExp)) return [];
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  const re = new RegExp(regex.source, flags);
+  const matches = [];
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    matches.push({ match: match[0], index: match.index });
+    if (re.lastIndex === match.index) re.lastIndex += 1;
+  }
+  return matches;
+}
+
+function toISODateTermo(raw) {
+  if (!raw) return null;
+  const text = String(raw).trim();
+  let m = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+  if (m) {
+    const [, y, mth, d] = m;
+    return `${y.padStart(4, "0")}-${mth.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  m = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (m) {
+    let [, d, mth, y] = m;
+    if (y.length === 2) y = (Number(y) >= 70 ? "19" : "20") + y;
+    return `${y.padStart(4, "0")}-${mth.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return null;
+}
+
+function analyseTermoOutorgaText(text = "") {
+  const simplified = String(text || "").replace(/\s+/g, " ").trim();
+  if (!simplified) {
+    return {
+      vigenciaRaw: "",
+      vigenciaISO: null,
+      valorMaximoRaw: "",
+      valorMaximo: null,
+    };
+  }
+
+  const lower = simplified.toLowerCase();
+  const dateMatches = collectMatches(/(\d{4}[\/-]\d{1,2}[\/-]\d{1,2})|(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/g, simplified);
+  const valueMatches = collectMatches(/(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})/gi, simplified);
+
+  const pickByKeyword = (matches, keywords) => {
+    if (!matches.length) return null;
+    let best = null;
+    matches.forEach((item) => {
+      const start = Math.max(0, item.index - 80);
+      const end = Math.min(simplified.length, item.index + item.match.length + 80);
+      const context = lower.slice(start, end);
+      let score = 0;
+      keywords.forEach((kw, idx) => {
+        let re;
+        if (kw instanceof RegExp) {
+          const flags = kw.flags.replace(/g/g, "");
+          re = new RegExp(kw.source, flags || "i");
+        } else {
+          re = new RegExp(String(kw), "i");
+        }
+        if (re.test(context)) score += (idx + 1) * 2;
+      });
+      if (score === 0) score = 1;
+      if (!best || score > best.score || (score === best.score && item.index > best.index)) {
+        best = { ...item, score };
+      }
+    });
+    return best;
+  };
+
+  const chosenDate = pickByKeyword(dateMatches, [/(vig[êe]ncia|vigencia)/i, /(t[ée]rmino|termino|fim)/i, /(at[ée])/i]);
+  const chosenValue = pickByKeyword(valueMatches, [/(valor|bolsa|limite|total|montante)/i]);
+
+  const vigenciaRaw = chosenDate?.match || "";
+  const vigenciaISO = vigenciaRaw ? toISODateTermo(vigenciaRaw) : null;
+
+  const valorRaw = chosenValue?.match || "";
+  const valorMaximo = valorRaw ? parseMoneyToNumber(valorRaw) : null;
+
+  return {
+    vigenciaRaw,
+    vigenciaISO,
+    valorMaximoRaw: valorRaw,
+    valorMaximo: valorMaximo ?? null,
+  };
 }
 
 function normalizeCotacaoProposta(entry, idx = 0) {
@@ -795,6 +890,43 @@ async function extractPurchaseDocData({ nfFile = null, oficioFile = null, ordemF
 
   return merged;
 }
+
+/* ================= ROTA: /parse-termo-outorga ================= */
+router.post("/parse-termo-outorga", async (req, res) => {
+  try {
+    await runSingleTermo(req, res);
+
+    const file = normalizeIncomingFile(req.file);
+    if (!file) {
+      return res.status(400).json({ ok: false, message: "Arquivo do termo ausente ou inválido." });
+    }
+
+    const name = file.originalname || "termo.pdf";
+    const mime = (file.mimetype || "").toLowerCase();
+    if (!mime.includes("pdf") && !name.toLowerCase().endsWith(".pdf")) {
+      return res.status(400).json({ ok: false, message: "Apenas arquivos PDF são aceitos." });
+    }
+
+    const rawText = await fileToText(file);
+    const parsed = analyseTermoOutorgaText(rawText);
+
+    return res.json({
+      ok: true,
+      data: {
+        fileName: name,
+        size: file.size,
+        rawText,
+        parsed,
+      },
+    });
+  } catch (err) {
+    console.error("[parse-termo-outorga]", err);
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ ok: false, message: "Arquivo excede o tamanho máximo de 25 MB." });
+    }
+    return res.status(500).json({ ok: false, message: "Erro ao processar termo de outorga." });
+  }
+});
 
 /* ================= ROTA: /parse-docs (NF/Ofício/Ordem/Cotações) ================= */
 router.post("/parse-docs", async (req, res) => {
