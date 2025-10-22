@@ -40,6 +40,7 @@ const TEMPLATE_BASE = join(__dirname, "src", "templates");
 
 // ===== OpenAI opcional =====
 const hasOpenAI = hasOpenAIKey();
+const useLegacyMapaRoute = process.env.LEGACY_MAPA === "1";
 
 /* ========================================================================== *
  *  Preparação de diretórios
@@ -836,6 +837,9 @@ app.use("/api", docRouter);
 
 // Expor base de templates e registrar rotas de geração (seu módulo)
 const openai = ensureOpenAIClient();
+if (!useLegacyMapaRoute) {
+  console.log("[mapa] rota aprimorada de geração habilitada.");
+}
 registerDocRoutes(app, { openai, TEMPLATE_BASE });
 
 /* ========================================================================== *
@@ -1137,104 +1141,107 @@ app.post("/api/generate/folha-rosto", (req, res) => {
 });
 
 // MAPA DE COTAÇÃO
-app.post("/api/generate/mapa-cotacao", async (req, res) => {
-  console.log("Payload recebido em mapa-cotacao.");
-  try {
-    const b = req.body || {};
-    const isVertex = String(b?.instituicao || "").toUpperCase() === "VERTEX";
-    const templateName = isVertex ? "mapa/mapa_vertex.docx" : "mapa/mapa_edge.docx";
-    const rubrica = (
-      b?.processo?.tipo_rubrica || b?.tipoRubrica || b?.rubrica || b?.prestacao || b?.naturezaDisp || ""
-    ).toString().trim();
+if (useLegacyMapaRoute) {
+  console.warn("[mapa] LEGACY_MAPA=1 habilitado — utilizando rota legada /api/generate/mapa-cotacao.");
+  app.post("/api/generate/mapa-cotacao", async (req, res) => {
+    console.log("Payload recebido em mapa-cotacao.");
+    try {
+      const b = req.body || {};
+      const isVertex = String(b?.instituicao || "").toUpperCase() === "VERTEX";
+      const templateName = isVertex ? "mapa/mapa_vertex.docx" : "mapa/mapa_edge.docx";
+      const rubrica = (
+        b?.processo?.tipo_rubrica || b?.tipoRubrica || b?.rubrica || b?.prestacao || b?.naturezaDisp || ""
+      ).toString().trim();
 
-    const frontPropsRaw = Array.isArray(b.propostas) ? b.propostas : [];
-    let propostas = normalizePropostas(frontPropsRaw);
-    let objeto = String(b.objeto || b.objetoDescricao || b.processo?.objeto || "");
-    if (objeto && rubrica && objeto.trim().toLowerCase() === rubrica.trim().toLowerCase()) objeto = "";
+      const frontPropsRaw = Array.isArray(b.propostas) ? b.propostas : [];
+      let propostas = normalizePropostas(frontPropsRaw);
+      let objeto = String(b.objeto || b.objetoDescricao || b.processo?.objeto || "");
+      if (objeto && rubrica && objeto.trim().toLowerCase() === rubrica.trim().toLowerCase()) objeto = "";
 
-    const cotacoesInput =
-      (Array.isArray(b?.docs?.cotacoes) ? b.docs.cotacoes : null) ??
-      (Array.isArray(b?.cotacoes) ? b.cotacoes : []);
-    const cotacoes = cotacoesInput.length ? await ensureCotacoesText(cotacoesInput) : [];
-    console.log("[mapa] cotacoes:", cotacoes.map(c => c.name));
+      const cotacoesInput =
+        (Array.isArray(b?.docs?.cotacoes) ? b.docs.cotacoes : null) ??
+        (Array.isArray(b?.cotacoes) ? b.cotacoes : []);
+      const cotacoes = cotacoesInput.length ? await ensureCotacoesText(cotacoesInput) : [];
+      console.log("[mapa] cotacoes:", cotacoes.map(c => c.name));
 
-    if ((!propostas || propostas.length === 0) && cotacoes.length > 0) {
-      const guessed = cotacoes.map((c, i) => ({ selecao: `Cotação ${i + 1}`, ...guessFieldsFromText(c.text) }));
-      propostas = normalizePropostas(guessed);
-    }
-    if ((!propostas || propostas.length === 0) && cotacoes.length > 0) {
-      propostas = cotacoes.map((_, i) => ({ selecao: `Cotação ${i + 1}`, ofertante: "", cnpj_ofertante: "", data_cotacao: "", valor: "" }));
-    }
-    if (hasOpenAI && cotacoes.length && (!objeto || !propostas.length)) {
-      const { objeto: aiObj, propostas: aiProps } = await extractFromCotacoesWithAI({ instituicao: b.instituicao || "", rubrica, cotacoes });
-      if (!objeto && aiObj) objeto = aiObj;
-      if (!propostas.length && aiProps?.length) propostas = aiProps;
-      else if (aiProps?.length) {
-        const L = Math.min(propostas.length, aiProps.length);
-        for (let i = 0; i < L; i++) {
-          const p = propostas[i] || {};
-          const a = aiProps[i] || {};
-          propostas[i] = {
-            selecao:        p.selecao        || a.selecao        || `Cotação ${i + 1}`,
-            ofertante:      p.ofertante      || a.ofertante      || "",
-            cnpj_ofertante: p.cnpj_ofertante || a.cnpj_ofertante || a.cnpj || "",
-            data_cotacao:   p.data_cotacao   || a.data_cotacao   || a.data || "",
-            valor:          p.valor          || a.valor          || a.valorBR || "",
-          };
-        }
-        if (aiProps.length > propostas.length) propostas = propostas.concat(aiProps.slice(propostas.length));
+      if ((!propostas || propostas.length === 0) && cotacoes.length > 0) {
+        const guessed = cotacoes.map((c, i) => ({ selecao: `Cotação ${i + 1}`, ...guessFieldsFromText(c.text) }));
+        propostas = normalizePropostas(guessed);
       }
+      if ((!propostas || propostas.length === 0) && cotacoes.length > 0) {
+        propostas = cotacoes.map((_, i) => ({ selecao: `Cotação ${i + 1}`, ofertante: "", cnpj_ofertante: "", data_cotacao: "", valor: "" }));
+      }
+      if (hasOpenAI && cotacoes.length && (!objeto || !propostas.length)) {
+        const { objeto: aiObj, propostas: aiProps } = await extractFromCotacoesWithAI({ instituicao: b.instituicao || "", rubrica, cotacoes });
+        if (!objeto && aiObj) objeto = aiObj;
+        if (!propostas.length && aiProps?.length) propostas = aiProps;
+        else if (aiProps?.length) {
+          const L = Math.min(propostas.length, aiProps.length);
+          for (let i = 0; i < L; i++) {
+            const p = propostas[i] || {};
+            const a = aiProps[i] || {};
+            propostas[i] = {
+              selecao:        p.selecao        || a.selecao        || `Cotação ${i + 1}`,
+              ofertante:      p.ofertante      || a.ofertante      || "",
+              cnpj_ofertante: p.cnpj_ofertante || a.cnpj_ofertante || a.cnpj || "",
+              data_cotacao:   p.data_cotacao   || a.data_cotacao   || a.data || "",
+              valor:          p.valor          || a.valor          || a.valorBR || "",
+            };
+          }
+          if (aiProps.length > propostas.length) propostas = propostas.concat(aiProps.slice(propostas.length));
+        }
+      }
+
+      const MIN_ROWS = 3;
+      while (propostas.length < MIN_ROWS) {
+        propostas.push({ selecao: `Cotação ${propostas.length + 1}`, ofertante: "", cnpj_ofertante: "", data_cotacao: "", valor: "" });
+      }
+      const propsForTemplate = (Array.isArray(propostas) ? propostas : []).map((p, i) => ({
+        selecao:         p.selecao || `Cotação ${i + 1}`,
+        ofertante:       p.ofertante || p.fornecedor || "",
+        cnpj_ofertante:  p.cnpj_ofertante || p.cnpj || p.cpf || p.cnpjCpf || "",
+        cnpj:            p.cnpj || p.cnpj_ofertante || p.cpf || p.cnpjCpf || "",
+        data_cotacao:    p.data_cotacao || p.data || p.dataCotacao || p.dataCotacaoBR || "",
+        data:            p.data || p.data_cotacao || p.dataCotacao || p.dataCotacaoBR || "",
+        valor:           p.valor || p.valorBR || p.total || "",
+      }));
+
+      console.log("[mapa] propostas count:", propsForTemplate.length);
+
+      const data_aquisicao = fmtBRDate(b.data_aquisicao || b.processo?.dataAquisicaoISO || b.dataPagamento || "");
+      const complemento = " Seleção pautada pela melhor proposta e pelo custo-benefício, considerando conformidade técnica, prazo e valor.";
+      const justificativa = String(b.justificativa || b.processo?.justificativa || "") + complemento;
+      const rodape = todayParts();
+      const local_data = `${rodape.localidade}, ${rodape.dia} de ${rodape.mes} de ${rodape.ano}`;
+      const coordenador_nome = String(b.coordenador || b.proj?.coordenador || "");
+
+      const data = {
+        instituicao:     b.instituicao || "",
+        cnpj_inst:       b.cnpjInstituicao || b.data?.cnpjInstituicao || b.proj?.cnpj || b.cnpj || "",
+        termo_parceria:  b.termoParceria || b.data?.termoParceria || b.proj?.termoParceria || b.termo || "",
+        projeto_nome:    b.proj?.projetoNome || b.projeto || b.titulo || "",
+        codigo_projeto:  b.proj?.projetoCodigo || b.codigo || b.projetoCodigo || "",
+        natureza_disp:   rubrica,
+        objeto,
+        propostas:       propsForTemplate,
+        data_aquisicao,
+        justificativa,
+        local_data,
+        coordenador_nome,
+      };
+
+      const buffer = renderDocxFromTemplate(templateName, data);
+      res
+        .set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        .set("Content-Disposition", `attachment; filename="mapa_cotacao_${isVertex ? "vertex" : "edge"}.docx"`)
+        .send(buffer);
+    } catch (err) {
+      console.error("[mapa] erro:", err);
+      res.status(500).type("text/plain; charset=utf-8")
+        .send("*** Mapa de Cotação (erro) *** Verifique nomes e pastas em src/templates/mapa.\n\n" + String(err?.message || err));
     }
-
-    const MIN_ROWS = 3;
-    while (propostas.length < MIN_ROWS) {
-      propostas.push({ selecao: `Cotação ${propostas.length + 1}`, ofertante: "", cnpj_ofertante: "", data_cotacao: "", valor: "" });
-    }
-    const propsForTemplate = (Array.isArray(propostas) ? propostas : []).map((p, i) => ({
-      selecao:         p.selecao || `Cotação ${i + 1}`,
-      ofertante:       p.ofertante || p.fornecedor || "",
-      cnpj_ofertante:  p.cnpj_ofertante || p.cnpj || p.cpf || p.cnpjCpf || "",
-      cnpj:            p.cnpj || p.cnpj_ofertante || p.cpf || p.cnpjCpf || "",
-      data_cotacao:    p.data_cotacao || p.data || p.dataCotacao || p.dataCotacaoBR || "",
-      data:            p.data || p.data_cotacao || p.dataCotacao || p.dataCotacaoBR || "",
-      valor:           p.valor || p.valorBR || p.total || "",
-    }));
-
-    console.log("[mapa] propostas count:", propsForTemplate.length);
-
-    const data_aquisicao = fmtBRDate(b.data_aquisicao || b.processo?.dataAquisicaoISO || b.dataPagamento || "");
-    const complemento = " Seleção pautada pela melhor proposta e pelo custo-benefício, considerando conformidade técnica, prazo e valor.";
-    const justificativa = String(b.justificativa || b.processo?.justificativa || "") + complemento;
-    const rodape = todayParts();
-    const local_data = `${rodape.localidade}, ${rodape.dia} de ${rodape.mes} de ${rodape.ano}`;
-    const coordenador_nome = String(b.coordenador || b.proj?.coordenador || "");
-
-    const data = {
-      instituicao:     b.instituicao || "",
-      cnpj_inst:       b.cnpjInstituicao || b.data?.cnpjInstituicao || b.proj?.cnpj || b.cnpj || "",
-      termo_parceria:  b.termoParceria || b.data?.termoParceria || b.proj?.termoParceria || b.termo || "",
-      projeto_nome:    b.proj?.projetoNome || b.projeto || b.titulo || "",
-      codigo_projeto:  b.proj?.projetoCodigo || b.codigo || b.projetoCodigo || "",
-      natureza_disp:   rubrica,
-      objeto,
-      propostas:       propsForTemplate,
-      data_aquisicao,
-      justificativa,
-      local_data,
-      coordenador_nome,
-    };
-
-    const buffer = renderDocxFromTemplate(templateName, data);
-    res
-      .set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-      .set("Content-Disposition", `attachment; filename="mapa_cotacao_${isVertex ? "vertex" : "edge"}.docx"`)
-      .send(buffer);
-  } catch (err) {
-    console.error("[mapa] erro:", err);
-    res.status(500).type("text/plain; charset=utf-8")
-      .send("*** Mapa de Cotação (erro) *** Verifique nomes e pastas em src/templates/mapa.\n\n" + String(err?.message || err));
-  }
-});
+  });
+}
 
 /* ===== Páginas ===== */
 app.get("/",              (_req, res) => res.sendFile(PUB("index.html")));
