@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Prestação de Contas — Gerenciamento de Bolsas</title>
   <link rel="stylesheet" href="/styles/styles.css" />
-  <script src="/vendor/pdfjs/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.js" crossorigin="anonymous"></script>
   <script>
     if (window.pdfjsLib?.GlobalWorkerOptions) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "/vendor/pdfjs/pdf.worker.min.js";
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js";
     }
   </script>
 </head>
