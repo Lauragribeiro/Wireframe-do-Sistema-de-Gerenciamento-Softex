@@ -10,8 +10,7 @@ import fsp from "node:fs/promises";
 import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import PizZip from "pizzip";
-import Docxtemplater from "docxtemplater";
+import { renderDocxBuffer } from "./src/utils/docxTemplate.js";
 
 import dayjs from "dayjs";
 import "dayjs/locale/pt-br.js";
@@ -868,31 +867,16 @@ function readTemplateBuffer(rel) {
 }
 function renderDocxFromTemplate(templateRelPath, data, forceDelims = "auto") {
   const buf = readTemplateBuffer(templateRelPath);
-  const zip = new PizZip(buf);
-  const docXmlPath = "word/document.xml";
-  const f = zip.file(docXmlPath);
-  let delimiters = { start: "{{", end: "}}" };
-  if (forceDelims === "single") delimiters = { start: "{", end: "}" };
-  else if (forceDelims === "double") delimiters = { start: "{{", end: "}}" };
-  else if (f) {
-    let xml = f.asText();
-    xml = xml.replace(/\{\{\s+/g, "{{").replace(/\s+\}\}/g, "}}").replace(/\{\s+/g, "{").replace(/\s+\}/g, "}");
-    const hasDouble = /{{[#/A-Za-z0-9_][^}]*}}/.test(xml);
-    const hasSingle = /{[#/A-Za-z0-9_][^}]*}/.test(xml);
-    delimiters = hasDouble ? { start: "{{", end: "}}" } : (hasSingle ? { start: "{", end: "}" } : delimiters);
-    zip.file(docXmlPath, xml);
-  }
-  const doc = new Docxtemplater(zip, {
-    paragraphLoop: true,
-    linebreaks: true,
-    delimiters,
-    nullGetter() { return ""; }
-  });
-  try { doc.render(data); } catch (err) {
-    try { console.error(JSON.stringify({ error: doc.getFullErrorInfo?.(err) || err }, null, 2)); } catch {}
+  const forced = forceDelims === "single" || forceDelims === "double"
+    ? forceDelims
+    : undefined;
+
+  try {
+    return renderDocxBuffer(buf, data, { forceDelimiters: forced });
+  } catch (err) {
+    console.error("[renderDocxFromTemplate] erro ao renderizar template", templateRelPath, err);
     throw err;
   }
-  return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
 }
 
 /* ===================== Helpers (formatação PT-BR) ===================== */
