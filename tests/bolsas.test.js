@@ -38,10 +38,53 @@ test('cria registro de bolsista com termo processado e adiciona na lista', () =>
   assert.equal(record.termo.valorMaximo, 9000);
   assert.equal(record.atualizadoEm, nowDate.toISOString());
   assert.equal(record.termo.parsedAt, nowDate.toISOString());
+  assert.deepEqual(record.historicoAlteracoes, []);
 
   const listaAtualizada = upsertBolsistas([], record, null);
   assert.equal(listaAtualizada.length, 1);
   assert.deepEqual(listaAtualizada[0], record);
+});
+
+test('registra histórico ao atualizar função e valor do bolsista', () => {
+  const createdAt = new Date('2024-08-01T12:00:00.000Z');
+  const updatedAt = new Date('2024-08-05T08:30:00.000Z');
+
+  const original = buildBolsistaRecord({
+    nome: 'Maria Oliveira',
+    cpfDigits: '52998224725',
+    funcao: 'Pesquisadora',
+    valorNum: 5000,
+    termoUpload: null,
+    now: () => createdAt,
+    idFactory: () => 'test-id-1',
+  });
+
+  const atualizado = buildBolsistaRecord({
+    editingId: 'test-id-1',
+    nome: 'Maria Oliveira',
+    cpfDigits: '52998224725',
+    funcao: 'Analista de Dados',
+    valorNum: 6200,
+    termoUpload: null,
+    fallbackTermo: original.termo,
+    now: () => updatedAt,
+    idFactory: () => 'test-id-1',
+    existingRecord: original,
+  });
+
+  assert.equal(atualizado.historicoAlteracoes.length, 2);
+  assert.deepEqual(atualizado.historicoAlteracoes[0], {
+    campo: 'funcao',
+    anterior: 'Pesquisadora',
+    atual: 'Analista de Dados',
+    modificadoEm: updatedAt.toISOString(),
+  });
+  assert.deepEqual(atualizado.historicoAlteracoes[1], {
+    campo: 'valor',
+    anterior: 5000,
+    atual: 6200,
+    modificadoEm: updatedAt.toISOString(),
+  });
 });
 
 test('mantém bolsista recém cadastrado quando armazenamento local ainda não possui dados', () => {
