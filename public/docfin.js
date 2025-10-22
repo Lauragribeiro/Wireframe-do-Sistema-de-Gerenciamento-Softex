@@ -170,7 +170,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     return dst;
   };
-  const clonePropostas = (list) => Array.isArray(list) ? list.map((item) => ({ ...item })) : [];
+  function clonePropostas(list) {
+    return Array.isArray(list) ? list.map((item) => ({ ...item })) : [];
+  }
+  if (typeof window !== "undefined") {
+    window.clonePropostas = clonePropostas;
+  }
   const cloneAvisos = (list) => Array.isArray(list) ? list.map((item) => String(item)) : [];
   const normalizeObjeto = (val) => {
     if (val == null) return "";
