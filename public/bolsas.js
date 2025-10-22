@@ -85,11 +85,73 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const PDF_JS_SRC = '/vendor/pdfjs/pdf.min.js';
-  const PDF_WORKER_SRC = '/vendor/pdfjs/pdf.worker.min.js';
+  const PDF_SOURCES = [
+    {
+      script: '/vendor/pdfjs/pdf.min.js',
+      worker: '/vendor/pdfjs/pdf.worker.min.js',
+    },
+    {
+      script: 'https://unpkg.com/pdfjs-dist@5.4.149/build/pdf.min.js',
+      worker: 'https://unpkg.com/pdfjs-dist@5.4.149/build/pdf.worker.min.js',
+    },
+  ];
 
   const ensurePdfReaderLoaded = (() => {
     let loading = null;
+    let chosenWorker = PDF_SOURCES[0].worker;
+
+    const setWorkerSrc = (lib, workerSrc) => {
+      if (!lib?.GlobalWorkerOptions) {
+        throw new Error('Biblioteca PDF.js carregada sem configurações de worker.');
+      }
+      lib.GlobalWorkerOptions.workerSrc = workerSrc;
+    };
+
+    const loadFromSource = ({ script, worker }) => new Promise((resolve, reject) => {
+      const tag = document.createElement('script');
+      tag.src = script;
+      tag.async = true;
+      tag.dataset.pdfjsLoader = script;
+
+      tag.onload = () => {
+        try {
+          const lib = window.pdfjsLib;
+          if (!lib) {
+            throw new Error('Biblioteca PDF.js não disponível após o carregamento.');
+          }
+          setWorkerSrc(lib, worker);
+          chosenWorker = worker;
+          resolve(lib);
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      tag.onerror = () => {
+        tag.remove();
+        reject(new Error(`Falha ao carregar PDF.js de ${script}.`));
+      };
+
+      document.head.appendChild(tag);
+    });
+
+    const loadPdfJs = async () => {
+      const errors = [];
+      for (const source of PDF_SOURCES) {
+        try {
+          return await loadFromSource(source);
+        } catch (err) {
+          errors.push(err);
+        }
+      }
+
+      if (errors.length) {
+        console.error('Falha ao carregar o leitor de PDF. Tentativas realizadas:', errors.map((e) => e?.message || e));
+      }
+
+      throw new Error('Não foi possível carregar o leitor de PDF. Verifique sua conexão ou tente novamente mais tarde.');
+    };
+
     return async () => {
       if (typeof window === 'undefined' || typeof document === 'undefined') {
         throw new Error('Leitura de PDF não suportada neste ambiente.');
@@ -97,39 +159,20 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
       const existingLib = window.pdfjsLib;
       if (existingLib?.GlobalWorkerOptions) {
-        existingLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
-        return existingLib;
+        try {
+          setWorkerSrc(existingLib, chosenWorker);
+          return existingLib;
+        } catch (err) {
+          console.warn('PDF.js disponível, mas não foi possível configurar o worker:', err);
+        }
       }
 
-      if (loading) {
-        return loading;
+      if (!loading) {
+        loading = loadPdfJs().catch((err) => {
+          loading = null;
+          throw err;
+        });
       }
-
-      loading = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = PDF_JS_SRC;
-        script.async = true;
-        script.dataset.pdfjsLoader = 'true';
-
-        script.onload = () => {
-          const lib = window.pdfjsLib;
-          if (lib?.GlobalWorkerOptions) {
-            lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
-            resolve(lib);
-          } else {
-            reject(new Error('Biblioteca PDF.js não disponível após o carregamento.'));
-          }
-        };
-
-        script.onerror = () => {
-          reject(new Error('Não foi possível carregar o leitor de PDF.'));
-        };
-
-        document.head.appendChild(script);
-      }).catch((err) => {
-        loading = null;
-        throw err;
-      });
 
       return loading;
     };
