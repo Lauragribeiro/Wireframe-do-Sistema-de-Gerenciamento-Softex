@@ -1,4 +1,6 @@
 // src/gptMapa.js
+import fs from "node:fs";
+
 import { ensureOpenAIClient } from "./openaiProvider.js";
 import {
   SYSTEM_EXTRACAO_COTACOES,
@@ -15,6 +17,37 @@ function requireClient() {
     throw new Error("OpenAI API key ausente ou inválida");
   }
   return client;
+}
+
+async function uploadCotacaoFiles(client, arquivos = []) {
+  const uploads = [];
+  for (const arquivo of arquivos || []) {
+    const filePath = arquivo?.path;
+    if (!filePath) continue;
+    try {
+      await fs.promises.access(filePath);
+    } catch {
+      continue;
+    }
+    try {
+      const stream = fs.createReadStream(filePath);
+      const uploaded = await client.files.create({
+        file: stream,
+        purpose: "vision",
+      });
+      uploads.push({
+        file_id: uploaded?.id,
+        label: arquivo?.name || arquivo?.label || "cotacao",
+      });
+    } catch (err) {
+      console.warn(
+        "[mapa] falha ao anexar cotação para leitura:",
+        arquivo?.name || arquivo?.path || "(sem nome)",
+        err?.message || err
+      );
+    }
+  }
+  return uploads;
 }
 
 const EXTRACAO_SCHEMA = {
@@ -59,22 +92,53 @@ const EXTRACAO_SCHEMA = {
  * @param {string} params.codigo_projeto
  * @param {string} params.rubrica
  * @param {string} params.lista_cotacoes_texto  // concatenação do texto das cotações
+ * @param {Array<{name?: string, path: string}>} [params.cotacoes_arquivos]
+ * @param {string} [params.cotacoes_anexos]
  * @returns {Promise<{propostas: Array, objeto_rascunho: string|null, avisos: string[]}>}
  */
 export async function extrairCotacoesDeTexto(params) {
   const userPrompt = USER_EXTRACAO_COTACOES(params);
   const client = requireClient();
-  const resp = await client.responses.create({
-    model: "gpt-4o-mini",
-    input: [
-      { role: "system", content: SYSTEM_EXTRACAO_COTACOES },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.1,
-    response_format: { type: "json_schema", json_schema: EXTRACAO_SCHEMA },
-  });
+  const arquivos = Array.isArray(params?.cotacoes_arquivos) ? params.cotacoes_arquivos : [];
+  const anexos = await uploadCotacaoFiles(client, arquivos);
+  const validAttachments = anexos.filter((item) => item?.file_id);
 
-  const raw = resp.output_text || "{}";
+  const userContent = validAttachments.length
+    ? [
+        { type: "input_text", text: userPrompt },
+        ...validAttachments.map((item) => ({ type: "input_file", file_id: item.file_id })),
+      ]
+    : userPrompt;
+
+  let resp;
+  try {
+    resp = await client.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: SYSTEM_EXTRACAO_COTACOES },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.1,
+      response_format: { type: "json_schema", json_schema: EXTRACAO_SCHEMA },
+    });
+  } finally {
+    if (validAttachments.length) {
+      const deletions = validAttachments.map((item) =>
+        client.files
+          .del(item.file_id)
+          .catch((err) =>
+            console.warn(
+              "[mapa] falha ao remover arquivo temporário da cotação:",
+              item.file_id,
+              err?.message || err
+            )
+          )
+      );
+      await Promise.allSettled(deletions);
+    }
+  }
+
+  const raw = resp?.output_text || "{}";
   let json;
   try {
     json = JSON.parse(raw);

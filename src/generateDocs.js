@@ -490,22 +490,68 @@ router.post("/mapa-cotacao", async (req, res) => {
     const openaiClient = hasOpenAI ? ensureOpenAIClient() : null;
     const cotacoesMap = new Map();
 
-    const pushCotacao = (name, text) => {
+    const pushCotacao = ({ name, text, filePath }) => {
       const cleanName = String(name || "").trim() || `cotacao_${cotacoesMap.size + 1}`;
       const key = cleanName.toLowerCase();
       const entry = cotacoesMap.get(key);
       if (entry) {
         if (!entry.text && text) entry.text = text;
+        if (!entry.path && filePath) entry.path = filePath;
       } else {
-        cotacoesMap.set(key, { name: cleanName, text: String(text || "") });
+        cotacoesMap.set(key, {
+          name: cleanName,
+          text: String(text || ""),
+          path: filePath && fs.existsSync(filePath) ? filePath : null,
+        });
       }
+    };
+
+    const resolveCotacaoFilePath = (rawEntry) => {
+      const candidates = [];
+      const pushCandidate = (value) => {
+        const clean = String(value || "").trim();
+        if (!clean) return;
+        candidates.push(clean);
+      };
+
+      if (rawEntry && typeof rawEntry === "object") {
+        if (rawEntry.path && fs.existsSync(rawEntry.path)) {
+          return rawEntry.path;
+        }
+        pushCandidate(rawEntry.filename || rawEntry.fileName || rawEntry.key);
+        pushCandidate(rawEntry.url || rawEntry.link || rawEntry.href);
+        pushCandidate(rawEntry.name || rawEntry.originalname);
+      } else if (typeof rawEntry === "string") {
+        pushCandidate(rawEntry);
+      }
+
+      for (const candidate of candidates) {
+        try {
+          const cleaned = String(candidate)
+            .replace(/^https?:\/\/[^/]+\//i, "")
+            .replace(/^uploads\//i, "")
+            .replace(/^\/+/, "")
+            .replace(/\?.*$/, "")
+            .split(/[\\/]/)
+            .filter(Boolean)
+            .pop();
+          if (!cleaned) continue;
+          const guess = path.join(__dirnameLocal, "data", "uploads", cleaned);
+          if (fs.existsSync(guess)) return guess;
+        } catch (e) {
+          console.warn("[mapa] resolveCotacaoFilePath falhou:", e?.message || e);
+        }
+      }
+
+      return null;
     };
 
     if (Array.isArray(body?.docs?.cotacoes)) {
       body.docs.cotacoes.forEach((c, idx) => {
         const name = c?.name || c?.filename || c?.fileName || c?.originalname || `cotacao_${idx + 1}`;
         const text = String(c?.text || "");
-        pushCotacao(name, text);
+        const filePath = resolveCotacaoFilePath(c);
+        pushCotacao({ name, text, filePath });
       });
     }
 
@@ -513,20 +559,47 @@ router.post("/mapa-cotacao", async (req, res) => {
       const names = body.cotacoes.map((c, idx) => String(c || `cotacao_${idx + 1}`));
       const texts = await Promise.all(names.map((name) => readPdfTextFromUploads(name).catch(() => "")));
       names.forEach((name, idx) => {
-        pushCotacao(name, texts[idx] || "");
+        const filePath = resolveCotacaoFilePath(name);
+        pushCotacao({ name, text: texts[idx] || "", filePath });
       });
     }
 
     const cotacoesEntries = Array.from(cotacoesMap.values());
-    const sections = cotacoesEntries
-      .map((entry, idx) => {
-        const textSec = String(entry.text || "").trim();
-        if (!textSec) return "";
-        return `### COTAÇÃO ${idx + 1} (${entry.name})\n${textSec.slice(0, 20000)}`;
-      })
-      .filter(Boolean);
+    const sections = cotacoesEntries.map((entry, idx) => {
+      const header = `### COTAÇÃO ${idx + 1} (${entry.name})`;
+      const textSec = String(entry.text || "").trim();
+      if (!textSec) {
+        return `${header}\n[Sem texto OCR disponível — utilize o arquivo anexado.]`;
+      }
+      return `${header}\n${textSec.slice(0, 20000)}`;
+    });
 
     const listaCotacoesTexto = sections.join("\n\n");
+
+    const cotacoesArquivos = cotacoesEntries
+      .map((entry, idx) =>
+        entry.path
+          ? {
+              index: idx,
+              name: entry.name,
+              path: entry.path,
+            }
+          : null
+      )
+      .filter(Boolean);
+
+    const hasArquivosCotacoes = cotacoesArquivos.length > 0;
+
+    const cotacoesResumo = hasArquivosCotacoes
+      ? cotacoesEntries
+          .map((entry, idx) => {
+            const parts = [`Cotação ${idx + 1}: ${entry.name}`];
+            if (entry.path) parts.push("[arquivo anexado]");
+            if (!String(entry.text || "").trim()) parts.push("[sem OCR]");
+            return parts.join(" ");
+          })
+          .join("\n")
+      : "";
 
     const propostasManuais = Array.isArray(body.propostas) ? body.propostas : [];
     let propostas = propostasManuais.map((p, idx) => normalizeProposal(p, idx)).filter(hasProposalData);
@@ -537,13 +610,17 @@ router.post("/mapa-cotacao", async (req, res) => {
       objetoDesc = body.objeto || meta.objeto || payload.objeto || "";
     }
 
-    if (openaiClient && listaCotacoesTexto) {
+    const hasTextoCotacoes = typeof listaCotacoesTexto === "string" && listaCotacoesTexto.trim().length > 0;
+
+    if (openaiClient && (hasTextoCotacoes || hasArquivosCotacoes)) {
       try {
         const analise = await extrairCotacoesDeTexto({
           instituicao,
           codigo_projeto: projetoCodigo || payload.projeto || "",
           rubrica: tipoRubrica || "",
           lista_cotacoes_texto: listaCotacoesTexto,
+          cotacoes_anexos: cotacoesResumo,
+          cotacoes_arquivos: cotacoesArquivos,
         });
 
         if (Array.isArray(analise?.avisos)) avisosCotacao.push(...analise.avisos);

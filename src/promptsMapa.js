@@ -24,6 +24,9 @@ Use esses títulos para identificar a ordem (Cotação 1, Cotação 2, ...).
 Arquivos de cotação (texto extraído/OCR + nomes de arquivo):
 ${ctx.lista_cotacoes_texto || ""}
 
+${ctx.cotacoes_anexos ? `Resumo dos anexos disponíveis:\n${ctx.cotacoes_anexos}\n` : ""}
+${ctx.cotacoes_anexos ? "Se algum trecho acima estiver ausente ou ilegível, utilize o conteúdo integral dos arquivos anexados na mesma ordem.\n" : ""}
+
 Instruções:
 - Leia APENAS as informações das propostas comerciais.
 - Para cada cotação, extraia nome/razão social do ofertante, CNPJ ou CPF, data de emissão/assinatura e valor total.
