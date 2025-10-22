@@ -4,8 +4,10 @@ import {
   SYSTEM_EXTRACAO_COTACOES,
   USER_EXTRACAO_COTACOES,
   SYSTEM_GERACAO_TEXTO,
-  USER_GERACAO_TEXTO
+  USER_GERACAO_TEXTO,
+  PROMPT_CONSOLIDA_PROPOSTAS,
 } from "./promptsMapa.js";
+import { extractCotacaoFromPdf } from "./gptExtracts.js";
 
 function requireClient() {
   const client = ensureOpenAIClient();
@@ -14,6 +16,41 @@ function requireClient() {
   }
   return client;
 }
+
+const EXTRACAO_SCHEMA = {
+  name: "cotacao_mapa",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["propostas", "objeto_rascunho", "avisos"],
+    properties: {
+      objeto_rascunho: { type: ["string", "null"], description: "Resumo objetivo do objeto comum." },
+      avisos: {
+        type: "array",
+        items: { type: "string" },
+        description: "Inconsistências ou dúvidas encontradas.",
+      },
+      propostas: {
+        type: "array",
+        description: "Lista das propostas detectadas nas cotações.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["selecao", "ofertante", "cnpj_cpf", "data_cotacao", "valor"],
+          properties: {
+            selecao: { type: "string", description: "Identificador sequencial da proposta." },
+            ofertante: { type: ["string", "null"] },
+            cnpj_cpf: { type: ["string", "null"] },
+            data_cotacao: { type: ["string", "null"], description: "Data no formato DD/MM/AAAA." },
+            valor: { type: ["number", "string", "null"], description: "Valor total ofertado." },
+            observacao: { type: ["string", "null"] },
+          },
+        },
+      },
+    },
+  },
+};
 
 /**
  * Extrai propostas de cotações (texto já OCRizado)
@@ -31,17 +68,21 @@ export async function extrairCotacoesDeTexto(params) {
     model: "gpt-4o-mini",
     input: [
       { role: "system", content: SYSTEM_EXTRACAO_COTACOES },
-      { role: "user", content: userPrompt }
+      { role: "user", content: userPrompt },
     ],
-    temperature: 0.1
+    temperature: 0.1,
+    response_format: { type: "json_schema", json_schema: EXTRACAO_SCHEMA },
   });
 
   const raw = resp.output_text || "{}";
   let json;
-  try { json = JSON.parse(raw); } catch { json = { propostas: [], objeto_rascunho: null, avisos: ["JSON inválido"] }; }
-  // Normalização leve
-  json.propostas = Array.isArray(json.propostas) ? json.propostas : [];
-  json.avisos = Array.isArray(json.avisos) ? json.avisos : [];
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    json = { propostas: [], objeto_rascunho: null, avisos: ["JSON inválido"] };
+  }
+  if (!Array.isArray(json.propostas)) json.propostas = [];
+  if (!Array.isArray(json.avisos)) json.avisos = [];
   return json;
 }
 
@@ -65,22 +106,38 @@ export async function gerarObjetoEJustificativa(params) {
     model: "gpt-4o",
     input: [
       { role: "system", content: SYSTEM_GERACAO_TEXTO },
-      { role: "user", content: userPrompt }
+      { role: "user", content: userPrompt },
     ],
-    temperature: 0.5
+    temperature: 0.5,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "objeto_justificativa",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["objeto", "justificativa"],
+          properties: {
+            objeto: { type: "string" },
+            justificativa: { type: "string" },
+          },
+        },
+      },
+    },
   });
 
   const raw = resp.output_text || "{}";
   let json;
-  try { json = JSON.parse(raw); } catch { json = { objeto: "", justificativa: "" }; }
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    json = { objeto: "", justificativa: "" };
+  }
   return {
     objeto: String(json.objeto || "").trim(),
-    justificativa: String(json.justificativa || "").trim()
+    justificativa: String(json.justificativa || "").trim(),
   };
 }
-// src/gptMapa.js
-import { PROMPT_CONSOLIDA_PROPOSTAS } from "./promptsMapa.js";
-import { extractCotacaoFromPdf } from "./gptExtracts.js";
 
 function parseBRL(v) {
   if (!v) return NaN;
@@ -89,21 +146,44 @@ function parseBRL(v) {
 }
 
 export async function buildPropostas(openai, cotacoesPaths = []) {
-  // 1) extrai uma por uma
   const extracoes = [];
   for (const p of cotacoesPaths) {
     const data = await extractCotacaoFromPdf(openai, p);
     extracoes.push(data);
   }
 
-  // 2) se você quiser consolidar pela IA (opcional)
   if (openai) {
     const res = await openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
         { role: "system", content: PROMPT_CONSOLIDA_PROPOSTAS.system },
-        { role: "user", content: PROMPT_CONSOLIDA_PROPOSTAS.user + "\n\n" + JSON.stringify(extracoes) },
+        {
+          role: "user",
+          content: `${PROMPT_CONSOLIDA_PROPOSTAS.user}\n\n${JSON.stringify(extracoes)}`,
+        },
       ],
+      response_format: { type: "json_schema", json_schema: {
+        name: "consolida_propostas",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            propostas: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  selecao: { type: ["string", "null"] },
+                  ofertante: { type: ["string", "null"] },
+                  cnpj_ofertante: { type: ["string", "null"] },
+                  data_cotacao: { type: ["string", "null"] },
+                  valor: { type: ["string", "null"] },
+                },
+              },
+            },
+          },
+        },
+      } },
     });
     const out = JSON.parse(res.output_text ?? "{}");
     if (Array.isArray(out?.propostas) && out.propostas.length) {
@@ -111,8 +191,7 @@ export async function buildPropostas(openai, cotacoesPaths = []) {
     }
   }
 
-  // 3) fallback local: normaliza, ordena por valor quando possível
-  const base = extracoes.map(x => ({
+  const base = extracoes.map((x) => ({
     selecao: "",
     ofertante: x?.ofertante ?? "",
     cnpj_ofertante: x?.cnpj_ofertante ?? null,
@@ -120,6 +199,6 @@ export async function buildPropostas(openai, cotacoesPaths = []) {
     valor: x?.valor ?? null,
     _num: parseBRL(x?.valor),
   }));
-  const allHave = base.every(b => Number.isFinite(b._num));
+  const allHave = base.every((b) => Number.isFinite(b._num));
   return (allHave ? base.sort((a, b) => a._num - b._num) : base).map(({ _num, ...r }) => r);
 }
