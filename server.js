@@ -13,6 +13,12 @@ import { fileURLToPath } from "node:url";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 
+import {
+  sanitizeDocxXml,
+  normalizeDocxPlaceholders,
+  renderDocxBuffer,
+} from "./src/utils/docxTemplate.js";
+
 import dayjs from "dayjs";
 import "dayjs/locale/pt-br.js";
 dayjs.locale("pt-br");
@@ -871,28 +877,34 @@ function renderDocxFromTemplate(templateRelPath, data, forceDelims = "auto") {
   const zip = new PizZip(buf);
   const docXmlPath = "word/document.xml";
   const f = zip.file(docXmlPath);
-  let delimiters = { start: "{{", end: "}}" };
-  if (forceDelims === "single") delimiters = { start: "{", end: "}" };
-  else if (forceDelims === "double") delimiters = { start: "{{", end: "}}" };
-  else if (f) {
+  if (f) {
     let xml = f.asText();
-    xml = xml.replace(/\{\{\s+/g, "{{").replace(/\s+\}\}/g, "}}").replace(/\{\s+/g, "{").replace(/\s+\}/g, "}");
-    const hasDouble = /{{[#/A-Za-z0-9_][^}]*}}/.test(xml);
-    const hasSingle = /{[#/A-Za-z0-9_][^}]*}/.test(xml);
-    delimiters = hasDouble ? { start: "{{", end: "}}" } : (hasSingle ? { start: "{", end: "}" } : delimiters);
+    xml = sanitizeDocxXml(xml);
+    xml = normalizeDocxPlaceholders(xml);
     zip.file(docXmlPath, xml);
   }
+
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
     linebreaks: true,
-    delimiters,
+    delimiters: { start: "{{", end: "}}" },
     nullGetter() { return ""; }
   });
-  try { doc.render(data); } catch (err) {
+
+  try {
+    doc.render(data);
+    return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
+  } catch (err) {
     try { console.error(JSON.stringify({ error: doc.getFullErrorInfo?.(err) || err }, null, 2)); } catch {}
-    throw err;
+    console.warn("[renderDocxFromTemplate] Docxtemplater falhou, aplicando fallback manual:", err?.message || err);
+    const forced = forceDelims === "single" || forceDelims === "double" ? forceDelims : undefined;
+    try {
+      return renderDocxBuffer(buf, data, { forceDelimiters: forced });
+    } catch (fallbackErr) {
+      console.error("[renderDocxFromTemplate] Fallback manual também falhou:", fallbackErr);
+      throw err;
+    }
   }
-  return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
 }
 
 /* ===================== Helpers (formatação PT-BR) ===================== */

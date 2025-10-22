@@ -11,6 +11,7 @@ import { buildPayloadBase } from "./utils/docxPayload.js";
 import { ensureFields, REQUIRED_MAPA, REQUIRED_FOLHA } from "./utils/templateGuards.js";
 import { ensureOpenAIClient, hasOpenAIKey, invalidateOpenAIClient } from "./openaiProvider.js";
 import { extrairCotacoesDeTexto, gerarObjetoEJustificativa } from "./gptMapa.js";
+import { escapeXml, renderDocxBuffer } from "./utils/docxTemplate.js";
 
 /** ===== OpenAI opcional (para extrair dados das cotações) ===== */
 const hasOpenAI = hasOpenAIKey();
@@ -316,115 +317,9 @@ function sanitizeFilename(name, fallback = "documento") {
     .replace(/_+/g, "_")
     .slice(0, 120);
 }
-function normalizeDocxPlaceholders(xml) {
-  if (!xml || typeof xml !== "string" || !xml.includes("{")) return xml;
-
-  const len = xml.length;
-  let result = "";
-  let i = 0;
-
-  while (i < len) {
-    const ch = xml[i];
-    if (ch === "{") {
-      let raw = "";
-      let openCount = 0;
-      let closeCount = 0;
-      let j = i;
-      let insideTag = false;
-
-      while (j < len) {
-        const current = xml[j];
-        raw += current;
-
-        if (current === "<") insideTag = true;
-        else if (current === ">") insideTag = false;
-        else if (!insideTag) {
-          if (current === "{") openCount += 1;
-          else if (current === "}") closeCount += 1;
-        }
-
-        j += 1;
-        if (openCount >= 2 && closeCount >= 2) break;
-      }
-
-      if (openCount >= 2 && closeCount >= 2) {
-        const plain = raw.replace(/<[^>]+>/g, "");
-        const inner = plain.slice(2, -2).replace(/\s+/g, " ").trim();
-        if (inner) result += `{{${inner}}}`;
-        i = j;
-        continue;
-      }
-    }
-
-    result += ch;
-    i += 1;
-  }
-
-  return result;
-}
-
-function renderDocx(templatePath, dataObj) {
-  const buf = fs.readFileSync(templatePath);
-  const zip = new PizZip(buf);
-
-  const docXmlPath = "word/document.xml";
-  const f = zip.file(docXmlPath);
-  if (f) {
-    let xml = f.asText();
-    xml = xml
-      .replace(/<w:proofErr[^>]*\/>/g, "")
-      .replace(/\{{{+/g, "{{")
-      .replace(/}}}+/g, "}}")
-      .replace(/\{\{\s+/g, "{{")
-      .replace(/\s+\}\}/g, "}}");
-
-    xml = normalizeDocxPlaceholders(xml);
-    xml = applyTemplate(xml, dataObj || {});
-    zip.file(docXmlPath, xml);
-  }
-
-  return zip.generate({ type: "nodebuffer" });
-}
-
-function applyTemplate(xml, context) {
-  let output = xml;
-
-  if (output.includes("{{#propostas}}")) {
-    const propostas = Array.isArray(context.propostas) ? context.propostas : [];
-    output = renderLoop(output, "propostas", propostas, context);
-  }
-
-  output = replaceSimpleTokens(output, context);
-  output = output.replace(/{{#[^}]+}}/g, "").replace(/{{\/[a-zA-Z0-9_]+}}/g, "");
-  return output;
-}
-
-function renderLoop(xml, loopName, rows, globalContext = {}) {
-  const startTag = `{{#${loopName}}}`;
-  const endTag = `{{/${loopName}}}`;
-  const startIdx = xml.indexOf(startTag);
-  const endIdx = xml.indexOf(endTag);
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return xml;
-
-  const before = xml.slice(0, startIdx);
-  const section = xml.slice(startIdx + startTag.length, endIdx);
-  const after = xml.slice(endIdx + endTag.length);
-
-  const rendered = rows
-    .map((row) => replaceSimpleTokens(section, { ...globalContext, ...row }))
-    .join("");
-
-  return `${before}${rendered}${after}`;
-}
-
-function replaceSimpleTokens(xml, context = {}) {
-  if (!xml.includes("{{")) return xml;
-  return xml.replace(/{{([a-zA-Z0-9_\.]+)}}/g, (match, key) => {
-    if (!Object.prototype.hasOwnProperty.call(context, key)) return "";
-    const value = context[key];
-    if (value === null || value === undefined) return "";
-    return escapeXml(String(value));
-  });
+function renderDocx(templatePath, dataObj, options = {}) {
+  const buffer = fs.readFileSync(templatePath);
+  return renderDocxBuffer(buffer, dataObj || {}, options);
 }
 
 const RUN_PREFIX = '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:color w:val="4472C4" w:themeColor="accent5"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">';
@@ -434,15 +329,6 @@ const MONTH_NAMES_FULL = [
   "janeiro", "fevereiro", "março", "abril", "maio", "junho",
   "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
 ];
-
-function escapeXml(value = "") {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 function buildRuns(text) {
   const raw = text == null ? "" : String(text);
