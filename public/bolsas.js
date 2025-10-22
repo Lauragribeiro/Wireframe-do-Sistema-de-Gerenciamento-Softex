@@ -49,10 +49,36 @@ export const buildBolsistaRecord = ({
   fallbackTermo = null,
   now = defaultNow,
   idFactory = defaultIdFactory,
+  existingRecord = null,
 } = {}) => {
   const stamp = now();
   const iso = stamp.toISOString();
   const termo = buildTermoData(termoUpload, fallbackTermo, () => stamp);
+  const historicoAlteracoes = Array.isArray(existingRecord?.historicoAlteracoes)
+    ? [...existingRecord.historicoAlteracoes]
+    : [];
+
+  const registrarAlteracao = (campo, anterior, atual) => {
+    historicoAlteracoes.unshift({
+      campo,
+      anterior,
+      atual,
+      modificadoEm: iso,
+    });
+  };
+
+  if (existingRecord) {
+    if (existingRecord.valor !== valorNum) {
+      registrarAlteracao('valor', existingRecord.valor ?? null, valorNum ?? null);
+    }
+
+    const funcaoAnterior = existingRecord.funcao ?? '';
+    const funcaoAtual = funcao ?? '';
+    if (funcaoAnterior !== funcaoAtual) {
+      registrarAlteracao('funcao', funcaoAnterior, funcaoAtual);
+    }
+  }
+
   return {
     id: editingId || idFactory(),
     nome,
@@ -61,6 +87,7 @@ export const buildBolsistaRecord = ({
     valor: valorNum,
     termo,
     atualizadoEm: iso,
+    historicoAlteracoes,
   };
 };
 
@@ -164,6 +191,20 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
     return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+  };
+
+  const formatDateTimeBR = (iso) => {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return String(iso);
+    }
+    const dia = String(date.getDate()).padStart(2, '0');
+    const mes = String(date.getMonth() + 1).padStart(2, '0');
+    const ano = date.getFullYear();
+    const hora = String(date.getHours()).padStart(2, '0');
+    const minuto = String(date.getMinutes()).padStart(2, '0');
+    return `${dia}/${mes}/${ano} às ${hora}:${minuto}`;
   };
 
   const toISODate = (raw) => {
@@ -396,6 +437,72 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     summary.hidden = false;
   };
 
+  const historicoCampoLabels = {
+    valor: 'Valor da Bolsa',
+    funcao: 'Função no Projeto',
+  };
+
+  const formatHistoricoValue = (campo, raw) => {
+    if (campo === 'valor') {
+      if (raw == null || raw === '') return '—';
+      return formatBRL(raw) || '—';
+    }
+    if (raw == null || raw === '') return '—';
+    return String(raw);
+  };
+
+  const updateHistoricoSection = (row = null) => {
+    if (!historicoCard || !historicoList) return;
+
+    if (!row) {
+      historicoCard.hidden = true;
+      historicoList.innerHTML = '<p class="history-block__empty muted">Nenhuma alteração registrada até o momento.</p>';
+      return;
+    }
+
+    const historico = Array.isArray(row.historicoAlteracoes) ? row.historicoAlteracoes : [];
+    historicoCard.hidden = false;
+
+    if (!historico.length) {
+      historicoList.innerHTML = '<p class="history-block__empty muted">Nenhuma alteração registrada até o momento.</p>';
+      return;
+    }
+
+    const items = historico.map((entry) => {
+      const campo = entry.campo || entry.field || '';
+      const label = historicoCampoLabels[campo] || entry.campoLabel || campo || 'Campo';
+      const anterior = escapeHtml(formatHistoricoValue(campo, entry.anterior));
+      const atual = escapeHtml(formatHistoricoValue(campo, entry.atual));
+      const rawData = entry.modificadoEm || entry.alteradoEm || entry.data || entry.timestamp || '';
+      const dataTexto = formatDateTimeBR(rawData) || '—';
+      const dataAttr = rawData ? ` datetime="${escapeHtml(rawData)}"` : '';
+      const dataHtml = rawData
+        ? `<time class="history-item__date"${dataAttr}>${escapeHtml(dataTexto)}</time>`
+        : `<span class="history-item__date">${escapeHtml(dataTexto)}</span>`;
+
+      return `
+        <article class="history-item">
+          <div class="history-item__header">
+            <span class="history-item__field">${escapeHtml(label)}</span>
+            ${dataHtml}
+          </div>
+          <div class="history-item__values">
+            <div class="history-item__value history-item__value--previous">
+              <span class="history-item__label">Anterior</span>
+              <span class="history-item__content">${anterior}</span>
+            </div>
+            <div class="history-item__value history-item__value--current">
+              <span class="history-item__label">Atual</span>
+              <span class="history-item__content">${atual}</span>
+            </div>
+          </div>
+        </article>
+      `;
+    });
+
+    historicoList.innerHTML = items.join('');
+  };
+
   const tableBody = $('#lista-bolsistas');
 
   const modal = $('#bolsista-modal');
@@ -413,6 +520,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const termoFileName = $('#termo-file-name');
   const termoFeedback = $('#termo-feedback');
   const formFeedback = $('#form-feedback');
+  const historicoCard = $('#historico-card');
+  const historicoList = $('#historico-list');
 
   const projectNome = $('#p-nome');
   const projectCodigo = $('#p-codigo');
@@ -518,6 +627,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     setFormFeedback('');
     setTermoFeedback('');
     updateTermoSummary(null);
+    updateHistoricoSection(null);
     termoUpload = null;
     editingId = null;
   };
@@ -539,6 +649,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     updateTermoSummary(null);
     setFormFeedback('');
     setTermoFeedback('');
+    updateHistoricoSection(null);
     termoUpload = null;
   };
 
@@ -589,6 +700,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       updateTermoSummary(null);
       setTermoFeedback('Faça upload de um Termo de Outorga em PDF.', 'info');
     }
+
+    updateHistoricoSection(row);
   };
 
   const openEditModal = (row) => {
@@ -706,6 +819,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       valorNum,
       termoUpload,
       fallbackTermo: existing?.termo || null,
+      existingRecord: existing || null,
     });
 
     bolsistas = upsertBolsistas(bolsistas, record, editingId);
