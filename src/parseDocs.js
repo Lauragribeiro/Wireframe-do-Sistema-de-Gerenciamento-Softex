@@ -53,6 +53,19 @@ const runMulter = (req, res) => new Promise((resolve, reject) => {
 });
 
 const runSingleTermo = (req, res) => new Promise((resolve, reject) => {
+  // Se o express-fileupload já tratou o payload, reutilizamos o arquivo
+  if (req.file) {
+    return resolve();
+  }
+
+  if (req.files && Object.keys(req.files).length > 0) {
+    const termo = req.files.termo;
+    if (termo) {
+      req.file = Array.isArray(termo) ? termo[0] : termo;
+    }
+    return resolve();
+  }
+
   upload.single("termo")(req, res, (err) => {
     if (err) reject(err);
     else resolve();
@@ -896,7 +909,14 @@ router.post("/parse-termo-outorga", async (req, res) => {
   try {
     await runSingleTermo(req, res);
 
-    const file = normalizeIncomingFile(req.file);
+    const expressFile = Array.isArray(req.files?.termo)
+      ? req.files?.termo?.[0]
+      : req.files?.termo;
+
+    const file = (
+      normalizeIncomingFile(req.file) ||
+      normalizeIncomingFile(expressFile)
+    );
     if (!file) {
       return res.status(400).json({ ok: false, message: "Arquivo do termo ausente ou inválido." });
     }
