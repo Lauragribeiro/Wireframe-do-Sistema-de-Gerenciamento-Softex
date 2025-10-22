@@ -188,6 +188,84 @@ document.addEventListener('DOMContentLoaded', function () {
     if (val == null) return "";
     return String(val).trim();
   };
+
+  const globalLoadingEl = document.getElementById("global-loading");
+  const globalLoadingText = document.getElementById("global-loading-text");
+  let loadingSeq = 0;
+  const loadingEntries = new Map();
+
+  function renderGlobalLoading(){
+    if (!globalLoadingEl) return;
+    if (!loadingEntries.size){
+      globalLoadingEl.classList.remove("is-visible");
+      globalLoadingEl.setAttribute("hidden", "");
+      globalLoadingEl.setAttribute("aria-busy", "false");
+      if (globalLoadingText) globalLoadingText.textContent = "Processando…";
+      return;
+    }
+    const messages = Array.from(loadingEntries.values());
+    const lastMessage = messages[messages.length - 1] || "Processando…";
+    if (globalLoadingText) globalLoadingText.textContent = lastMessage;
+    globalLoadingEl.setAttribute("aria-busy", "true");
+    globalLoadingEl.classList.add("is-visible");
+    globalLoadingEl.removeAttribute("hidden");
+  }
+
+  function startGlobalLoading(message){
+    if (!globalLoadingEl) return null;
+    const id = ++loadingSeq;
+    const label = typeof message === "string" && message.trim() ? message.trim() : "Processando…";
+    loadingEntries.set(id, label);
+    renderGlobalLoading();
+    return id;
+  }
+
+  function finishGlobalLoading(id){
+    if (!globalLoadingEl) return;
+    if (id != null && loadingEntries.has(id)) {
+      loadingEntries.delete(id);
+    }
+    renderGlobalLoading();
+  }
+
+  function defaultLoadingMessageForFetch(input){
+    const url = typeof input === "string"
+      ? input
+      : (input && typeof input === "object" && typeof input.url === "string" ? input.url : "");
+    if (!url) return "Processando…";
+    if (url.includes("/api/generate/mapa-cotacao")) return "Gerando mapa de cotação…";
+    if (url.includes("/api/generate/")) return "Gerando documento…";
+    if (url.includes("/api/purchases")) return "Sincronizando dados…";
+    if (url.includes("/api/parse") || url.includes("/api/extrair")) return "Processando arquivos…";
+    return "Processando…";
+  }
+
+  if (typeof window !== "undefined" && window.fetch && !window.__docfinFetchWrapped) {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async function(input, init){
+      let fetchInit = init;
+      let message = defaultLoadingMessageForFetch(input);
+      const hasRequest = typeof Request !== "undefined";
+      if (fetchInit && typeof fetchInit === "object" && !(hasRequest && fetchInit instanceof Request)) {
+        if (Object.prototype.hasOwnProperty.call(fetchInit, "loadingMessage")) {
+          const custom = fetchInit.loadingMessage;
+          if (typeof custom === "string" && custom.trim()) {
+            message = custom.trim();
+          }
+          fetchInit = { ...fetchInit };
+          delete fetchInit.loadingMessage;
+        }
+      }
+      const token = startGlobalLoading(message);
+      try {
+        return await nativeFetch(input, fetchInit);
+      } finally {
+        finishGlobalLoading(token);
+      }
+    };
+    window.__docfinFetchWrapped = true;
+  }
+
 /* ================== Seletores / Estado ================== */
 const form    = $("#form-evid");
 const tblBody = $("#tbl-pc tbody");
@@ -2150,6 +2228,44 @@ form.addEventListener("submit", async (e) => {
     return parsed.filter(p => p.ofertante || p.cnpj_ofertante || p.data_cotacao || p.valor);
   }
 
+  function decodeBase64Url(str){
+    if (!str) return "";
+    const normalized = str.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+    try {
+      return atob(normalized + padding);
+    } catch {
+      return "";
+    }
+  }
+
+  function parseMapaHeader(encoded){
+    if (!encoded) return null;
+    try {
+      const decoded = decodeBase64Url(encoded);
+      return decoded ? JSON.parse(decoded) : null;
+    } catch (err) {
+      console.warn("[docfin] não foi possível decodificar o cabeçalho do mapa:", err);
+      return null;
+    }
+  }
+
+  function collectMapaPendencias(details){
+    if (!details || typeof details !== "object") return [];
+    const parts = [];
+    const add = (list) => {
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        const txt = typeof item === "string" ? item.trim() : String(item || "").trim();
+        if (txt) parts.push(txt);
+      }
+    };
+    add(details?.final?.pendencias);
+    add(details?.ia?.pendencias);
+    add(details?.avisos);
+    return Array.from(new Set(parts));
+  }
+
   async function postAndDownload(url, body, filenameFallback, mime){
     console.log("[docfin] POST →", url, {
       keys: Object.keys(body||{}),
@@ -2157,32 +2273,80 @@ form.addEventListener("submit", async (e) => {
       docsCotacoesLen: Array.isArray(body?.docs?.cotacoes) ? body.docs.cotacoes.length : 0
     });
 
-    let res;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      console.error("[docfin] Falha de rede:", e);
-      alert("Não consegui conectar ao servidor. Veja o console.");
-      throw e;
-    }
-    if (!res.ok){
-      const txt = await res.text().catch(()=> "");
-      console.error("[docfin] HTTP", res.status, txt);
-      alert(`Erro ${res.status} ao gerar documento.\n${txt || "(sem detalhes)"}`);
-      throw new Error(`HTTP ${res.status}`);
+    const isMapa = typeof url === "string" && url.includes("/api/generate/mapa-cotacao");
+    const maxAttempts = isMapa ? 3 : 1;
+    let attempt = 0;
+    let finalArrayBuffer = null;
+    let finalDisposition = "";
+    let finalStatus = "";
+    let finalDetails = null;
+
+    while (attempt < maxAttempts) {
+      const loadingMessage = isMapa
+        ? (attempt === 0
+            ? "Gerando mapa de cotação…"
+            : `Reprocessando mapa de cotação (${attempt + 1}/${maxAttempts})…`)
+        : "Gerando documento…";
+
+      let res;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          loadingMessage,
+        });
+      } catch (e) {
+        console.error("[docfin] Falha de rede:", e);
+        alert("Não consegui conectar ao servidor. Veja o console.");
+        throw e;
+      }
+
+      if (!res.ok){
+        const txt = await res.text().catch(()=> "");
+        console.error("[docfin] HTTP", res.status, txt);
+        alert(`Erro ${res.status} ao gerar documento.\n${txt || "(sem detalhes)"}`);
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const dispo = res.headers.get("Content-Disposition") || "";
+      const statusHeader = res.headers.get("X-Mapa-Status") || "";
+      const detailsHeader = res.headers.get("X-Mapa-Detalhes") || "";
+      const details = parseMapaHeader(detailsHeader);
+
+      const ab = await res.arrayBuffer();
+      const shouldRetry =
+        isMapa &&
+        attempt + 1 < maxAttempts &&
+        statusHeader &&
+        statusHeader.toLowerCase() !== "complete";
+
+      if (shouldRetry) {
+        console.warn(`(mapa) tentativa ${attempt + 1} incompleta`, details);
+        attempt += 1;
+        continue;
+      }
+
+      finalArrayBuffer = ab;
+      finalDisposition = dispo;
+      finalStatus = statusHeader;
+      finalDetails = details;
+      break;
     }
 
-    const dispo = res.headers.get("Content-Disposition") || "";
+    if (!finalArrayBuffer) {
+      alert("Não foi possível gerar o documento após múltiplas tentativas. Revise os dados e tente novamente.");
+      throw new Error("Não foi possível gerar o documento após múltiplas tentativas.");
+    }
+
+    const dispo = finalDisposition || "";
     const m = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(dispo);
     const suggested = m ? decodeURIComponent(m[1]) : null;
     const filename = sanitize(suggested || filenameFallback || "documento");
 
-    const ab = await res.arrayBuffer();
-    const blob = new Blob([ab], { type: mime || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    const blob = new Blob([finalArrayBuffer], {
+      type: mime || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
 
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2192,7 +2356,24 @@ form.addEventListener("submit", async (e) => {
       URL.revokeObjectURL(a.href);
       a.remove();
     }
-    console.log("[docfin] ✓ Download", filename);
+    console.log("[docfin] ✓ Download", filename, finalDetails || "");
+
+    if (isMapa) {
+      const status = (finalStatus || "").toLowerCase();
+      const pendencias = collectMapaPendencias(finalDetails);
+      if (typeof window !== "undefined") {
+        window.lastMapaStatus = { status: finalStatus || "", detalhes: finalDetails || null };
+      }
+      if (status !== "complete" || pendencias.length) {
+        if (pendencias.length) {
+          alert(`Mapa gerado com pendências:\n- ${pendencias.join("\n- ")}`);
+        } else {
+          alert("Mapa gerado, mas não foi possível confirmar o preenchimento completo das propostas.");
+        }
+      }
+    }
+
+    return { filename, status: finalStatus, detalhes: finalDetails };
   }
 
   // ---------- payload builders ----------

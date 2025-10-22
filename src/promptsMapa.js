@@ -3,6 +3,7 @@
 // ====== Prompt 1: EXTRAÇÃO das cotações (propostas) ======
 export const SYSTEM_EXTRACAO_COTACOES = `
 Você é um analista de propostas comerciais. Leia SOMENTE o conteúdo fornecido e produza dados fiéis.
+- Pense passo a passo, validando cada campo com base nas evidências do documento.
 - Não invente informações; quando não encontrar um campo, retorne null.
 - Datas em DD/MM/AAAA.
 - CNPJ/CPF com pontuação, quando possível.
@@ -34,6 +35,25 @@ Instruções:
 - Use "Cotação 1", "Cotação 2" etc. em "selecao" quando não houver título explícito.
 - Preencha "objeto_rascunho" com uma frase padrão (ex.: "Aquisição de ... conforme especificações...").
 - Retorne SOMENTE o JSON final, sem textos adicionais.
+`;
+
+export const USER_EXTRACAO_COTACOES_REFINO = (ctx) => `
+Reanálise passo ${ctx.tentativa || 2}:
+- Instituição: ${ctx.instituicao || ""}
+- Código do Projeto: ${ctx.codigo_projeto || ""}
+- Rubrica (natureza do dispêndio): ${ctx.rubrica || ""}
+
+Você já leu as cotações. Abaixo está o resultado parcial que ainda contém lacunas:
+${ctx.resultado_anterior || "{}"}
+
+Pendências detectadas:
+${ctx.pendencias?.length ? ctx.pendencias.map((item, idx) => `${idx + 1}. ${item}`).join("\n") : "- Nenhuma pendência textual foi informada, mas confirme todos os campos."}
+
+Leia novamente as cotações fornecidas anteriormente (mesmos anexos) e corrija o JSON.
+- Preencha os campos ausentes quando a informação estiver presente no documento.
+- Quando a informação realmente não existir, mantenha null, mas explique em "avisos".
+- Garanta que cada proposta contenha ofertante, CNPJ/CPF (ou null justificado), data da cotação e valor numérico.
+- Retorne apenas o JSON atualizado.
 `;
 
 // ====== Prompt 2: GERAÇÃO do Objeto e Justificativa ======
