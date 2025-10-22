@@ -4,6 +4,7 @@ import express from "express";
 import multer from "multer";
 import Tesseract from "tesseract.js";
 import { ensureOpenAIClient, invalidateOpenAIClient } from "./openaiProvider.js";
+import { extrairCotacoesDeTexto } from "./gptMapa.js";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import path from "node:path";
 import fs from "node:fs";
@@ -817,10 +818,48 @@ async function extractPurchaseDocData({ nfFile = null, oficioFile = null, ordemF
   const llm = (llmRaw && typeof llmRaw === "object" && llmRaw.data) ? llmRaw.data : (llmRaw || {});
 
   let cotacoesAI = null;
-  try {
-    cotacoesAI = await analyzeCotacoesWithLLM(cotEntries);
-  } catch (err) {
-    console.warn("[parse-docs] analyzeCotacoesWithLLM falhou:", err?.message || err);
+  if (cotEntries.length) {
+    try {
+      const analise = await extrairCotacoesDeTexto({
+        instituicao: "",
+        codigo_projeto: "",
+        rubrica: "",
+        lista_cotacoes_texto: cotText,
+        cotacoes_arquivos: [],
+        cotacoes_anexos: cotEntries.map((entry, idx) => `Cotação ${idx + 1}: ${entry.name}`).join("\n"),
+      });
+      if (analise && typeof analise === "object") {
+        const avisos = Array.isArray(analise.avisos)
+          ? analise.avisos.map((msg) => String(msg))
+          : [];
+        const propostas = Array.isArray(analise.propostas)
+          ? analise.propostas
+              .map((item, idx) => normalizeCotacaoProposta(item, idx))
+              .filter(Boolean)
+          : [];
+        cotacoesAI = {
+          objeto: String(analise.objeto_rascunho || analise.objeto || "").trim(),
+          propostas,
+          avisos,
+        };
+      }
+    } catch (err) {
+      console.warn("[parse-docs] extrairCotacoesDeTexto falhou:", err?.message || err);
+    }
+  }
+  if (!cotacoesAI) {
+    try {
+      cotacoesAI = await analyzeCotacoesWithLLM(cotEntries);
+    } catch (err) {
+      console.warn("[parse-docs] analyzeCotacoesWithLLM falhou:", err?.message || err);
+    }
+  }
+  if (cotacoesAI) {
+    if (!Array.isArray(cotacoesAI.propostas)) cotacoesAI.propostas = [];
+    if (!Array.isArray(cotacoesAI.avisos)) cotacoesAI.avisos = [];
+    if (/^na[oã] informado$/i.test(String(cotacoesAI.objeto || ""))) {
+      cotacoesAI.objeto = "";
+    }
   }
 
   // 4) Merge — NF
@@ -864,7 +903,7 @@ async function extractPurchaseDocData({ nfFile = null, oficioFile = null, ordemF
   };
 
   if (cotacoesAI) {
-    merged.cotacoes_objeto = cotacoesAI.objeto || "Não informado";
+    merged.cotacoes_objeto = cotacoesAI.objeto || "";
     merged.cotacoes_propostas = cotacoesAI.propostas || [];
     if (cotacoesAI.avisos?.length) merged.cotacoes_avisos = cotacoesAI.avisos;
     if (!merged.objeto && cotacoesAI.objeto) merged.objeto = cotacoesAI.objeto;

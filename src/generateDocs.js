@@ -159,6 +159,52 @@ function mergeProposalFields(base = {}, fallback = {}) {
   return out;
 }
 
+function normalizeObjetoTexto(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const normalized = text.replace(/\s+/g, " ").toLowerCase();
+  if (normalized === "não informado" || normalized === "nao informado" || normalized === "—" || normalized === "-") {
+    return "";
+  }
+  return text;
+}
+
+function uniqueCaseInsensitive(list = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const text = String(item || "").trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
+function buildObjetoFallback(rubrica, proposals = [], cotacoesNomes = []) {
+  const rubricaText = String(rubrica || "").trim();
+  const fornecedores = uniqueCaseInsensitive(
+    proposals.map((p) => (p?.ofertante || p?.fornecedor || "").toString().trim())
+  ).slice(0, 3);
+  const fornecedoresTxt = fornecedores.length
+    ? `, com propostas apresentadas por ${fornecedores.join(", ")}`
+    : "";
+
+  if (rubricaText) {
+    return `Aquisição de itens e/ou serviços vinculados à rubrica "${rubricaText}"${fornecedoresTxt}, conforme detalhamento das cotações anexas.`;
+  }
+
+  if (cotacoesNomes.length) {
+    const lista = cotacoesNomes.slice(0, 3).join(", ");
+    return `Aquisição com base nas cotações ${lista}${fornecedoresTxt}, seguindo as especificações apresentadas nos orçamentos.`;
+  }
+
+  return `Aquisição conforme as especificações técnicas das cotações anexas${fornecedoresTxt}.`;
+}
+
 function hasProposalData(p = {}) {
   return (
     isFilled(p.ofertante) ||
@@ -481,7 +527,7 @@ router.post("/mapa-cotacao", async (req, res) => {
     // ✅ usar EXATAMENTE tipoRubrica
     const tipoRubrica     = (body?.tipoRubrica || "").toString().trim();
 
-    let objetoDesc        = body.objetoDescricao || payload.objeto || "";
+    let objetoDesc        = normalizeObjetoTexto(body.objetoDescricao || payload.objeto || "");
     const justBase        = body.justificativa || meta.justificativa || payload.justificativa || "";
     const dataPagamento   = fmtBRDate(body.dataPagamento || meta.dataPagamento || payload.dt_pagamento || "");
     const coordenadorNome = body.coordenadorNome || meta.coordenadorNome || "";
@@ -565,6 +611,7 @@ router.post("/mapa-cotacao", async (req, res) => {
     }
 
     const cotacoesEntries = Array.from(cotacoesMap.values());
+    const cotacoesNomes = cotacoesEntries.map((entry, idx) => entry.name || `Cotação ${idx + 1}`);
     const sections = cotacoesEntries.map((entry, idx) => {
       const header = `### COTAÇÃO ${idx + 1} (${entry.name})`;
       const textSec = String(entry.text || "").trim();
@@ -607,7 +654,7 @@ router.post("/mapa-cotacao", async (req, res) => {
     const avisosCotacao = Array.isArray(body.cotacoesAvisos) ? [...body.cotacoesAvisos] : [];
 
     if (!objetoDesc) {
-      objetoDesc = body.objeto || meta.objeto || payload.objeto || "";
+      objetoDesc = normalizeObjetoTexto(body.objeto || meta.objeto || payload.objeto || "");
     }
 
     const hasTextoCotacoes = typeof listaCotacoesTexto === "string" && listaCotacoesTexto.trim().length > 0;
@@ -626,7 +673,7 @@ router.post("/mapa-cotacao", async (req, res) => {
         if (Array.isArray(analise?.avisos)) avisosCotacao.push(...analise.avisos);
 
         if (!objetoDesc && analise?.objeto_rascunho) {
-          objetoDesc = String(analise.objeto_rascunho || "").trim();
+          objetoDesc = normalizeObjetoTexto(analise.objeto_rascunho);
         }
 
         const propostasIA = Array.isArray(analise?.propostas)
@@ -721,15 +768,17 @@ router.post("/mapa-cotacao", async (req, res) => {
           data_pagamento: dataPagamento || "",
           localidade,
         });
-        if (objeto) objetoFinal = objeto;
+        if (objeto) objetoFinal = normalizeObjetoTexto(objeto);
         if (justAI) justificativaFinal = justAI;
       } catch (err) {
         console.warn("[mapa] gerarObjetoEJustificativa falhou:", err?.message || err);
       }
     }
 
-    if (!objetoFinal) objetoFinal = objetoDesc || "";
-    if (!objetoFinal) objetoFinal = "";
+    if (!objetoFinal) objetoFinal = normalizeObjetoTexto(objetoDesc || "");
+    if (!objetoFinal) {
+      objetoFinal = buildObjetoFallback(tipoRubrica, propostasForTemplate, cotacoesNomes);
+    }
 
     if (!justificativaFinal) {
       justificativaFinal = fallbackComplemento;
