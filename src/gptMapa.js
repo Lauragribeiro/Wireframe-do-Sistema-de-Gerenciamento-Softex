@@ -5,6 +5,7 @@ import { ensureOpenAIClient } from "./openaiProvider.js";
 import {
   SYSTEM_EXTRACAO_COTACOES,
   USER_EXTRACAO_COTACOES,
+  USER_EXTRACAO_COTACOES_REFINO,
   SYSTEM_GERACAO_TEXTO,
   USER_GERACAO_TEXTO,
   PROMPT_CONSOLIDA_PROPOSTAS,
@@ -85,6 +86,105 @@ const EXTRACAO_SCHEMA = {
   },
 };
 
+const DEFAULT_MAX_ATTEMPTS = 3;
+
+function buildUserContent(promptText, attachments = []) {
+  if (!attachments.length) {
+    return promptText;
+  }
+  return [
+    { type: "input_text", text: promptText },
+    ...attachments.map((item) => ({ type: "input_file", file_id: item.file_id })),
+  ];
+}
+
+function toPromptJSON(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "{}";
+  }
+}
+
+function hasFilledValue(value) {
+  if (value == null) return false;
+  if (typeof value === "number") return Number.isFinite(value);
+  const str = String(value).trim();
+  return str.length > 0;
+}
+
+function avaliarPropostas(propostas = []) {
+  const list = Array.isArray(propostas) ? propostas : [];
+  const relevantes = list.filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    return (
+      hasFilledValue(item.ofertante) ||
+      hasFilledValue(item.cnpj_cpf ?? item.cnpj ?? item.cnpj_ofertante) ||
+      hasFilledValue(item.valor) ||
+      hasFilledValue(item.data_cotacao ?? item.data ?? item.dataCotacao)
+    );
+  });
+
+  const missingMap = {
+    ofertante: [],
+    cnpj_cpf: [],
+    data_cotacao: [],
+    valor: [],
+  };
+
+  relevantes.forEach((row, idx) => {
+    const label = `Cotação ${idx + 1}`;
+    if (!hasFilledValue(row.ofertante)) missingMap.ofertante.push(label);
+    if (!hasFilledValue(row.cnpj_cpf ?? row.cnpj ?? row.cnpj_ofertante)) missingMap.cnpj_cpf.push(label);
+    if (!hasFilledValue(row.data_cotacao ?? row.data ?? row.dataCotacao)) missingMap.data_cotacao.push(label);
+    if (!hasFilledValue(row.valor)) missingMap.valor.push(label);
+  });
+
+  const issues = [];
+  if (!relevantes.length) {
+    issues.push("Nenhuma proposta identificada nas cotações.");
+  }
+  Object.entries(missingMap).forEach(([field, refs]) => {
+    if (refs.length) {
+      const label = field.replace(/_/g, " ");
+      issues.push(`${label} ausente em ${refs.join(", ")}.`);
+    }
+  });
+
+  const complete = relevantes.length >= 3 && Object.values(missingMap).every((arr) => arr.length === 0);
+
+  return {
+    complete,
+    issues,
+    missingMap,
+    count: relevantes.length,
+  };
+}
+
+async function runExtracaoCotacoes(client, promptText, attachments) {
+  const content = buildUserContent(promptText, attachments);
+  const resp = await client.responses.create({
+    model: "gpt-4o-mini",
+    input: [
+      { role: "system", content: SYSTEM_EXTRACAO_COTACOES },
+      { role: "user", content: content },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_schema", json_schema: EXTRACAO_SCHEMA },
+  });
+
+  const raw = resp?.output_text || "{}";
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {
+      propostas: [],
+      objeto_rascunho: null,
+      avisos: ["JSON inválido retornado pelo modelo."],
+    };
+  }
+}
+
 /**
  * Extrai propostas de cotações (texto já OCRizado)
  * @param {Object} params
@@ -96,34 +196,79 @@ const EXTRACAO_SCHEMA = {
  * @param {string} [params.cotacoes_anexos]
  * @returns {Promise<{propostas: Array, objeto_rascunho: string|null, avisos: string[]}>}
  */
-export async function extrairCotacoesDeTexto(params) {
-  const userPrompt = USER_EXTRACAO_COTACOES(params);
+export async function extrairCotacoesDeTexto(params, options = {}) {
   const client = requireClient();
   const arquivos = Array.isArray(params?.cotacoes_arquivos) ? params.cotacoes_arquivos : [];
   const anexos = await uploadCotacaoFiles(client, arquivos);
-  const validAttachments = anexos.filter((item) => item?.file_id);
+  const attachments = anexos.filter((item) => item?.file_id);
+  const maxAttempts = Math.max(1, Number(options?.maxAttempts) || DEFAULT_MAX_ATTEMPTS);
 
-  const userContent = validAttachments.length
-    ? [
-        { type: "input_text", text: userPrompt },
-        ...validAttachments.map((item) => ({ type: "input_file", file_id: item.file_id })),
-      ]
-    : userPrompt;
+  const avisosSet = new Set();
+  const tentativas = [];
+  let ultimoResultado = { propostas: [], objeto_rascunho: null, avisos: [] };
+  let avaliacao = avaliarPropostas(ultimoResultado.propostas);
 
-  let resp;
   try {
-    resp = await client.responses.create({
-      model: "gpt-4o-mini",
-      input: [
-        { role: "system", content: SYSTEM_EXTRACAO_COTACOES },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.1,
-      response_format: { type: "json_schema", json_schema: EXTRACAO_SCHEMA },
-    });
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const tentativaNumero = attempt + 1;
+      const prompt =
+        attempt === 0
+          ? USER_EXTRACAO_COTACOES(params)
+          : USER_EXTRACAO_COTACOES_REFINO({
+              ...params,
+              tentativa: tentativaNumero,
+              resultado_anterior: toPromptJSON(ultimoResultado),
+              pendencias: avaliacao.issues,
+            });
+
+      let json;
+      try {
+        json = await runExtracaoCotacoes(client, prompt, attachments);
+      } catch (err) {
+        const msg = `Falha na leitura das cotações (tentativa ${tentativaNumero}): ${err?.message || err}`;
+        avisosSet.add(msg);
+        tentativas.push({
+          tentativa: tentativaNumero,
+          propostas: ultimoResultado?.propostas?.length ?? 0,
+          completo: false,
+          pendencias: [msg],
+          erro: true,
+        });
+        if (attempt + 1 >= maxAttempts) {
+          break;
+        }
+        continue;
+      }
+
+      const propostas = Array.isArray(json?.propostas) ? json.propostas : [];
+      const avisos = Array.isArray(json?.avisos) ? json.avisos : [];
+      ultimoResultado = {
+        propostas,
+        objeto_rascunho: json?.objeto_rascunho ?? null,
+        avisos,
+      };
+
+      avisos.forEach((item) => avisosSet.add(String(item || "")));
+
+      avaliacao = avaliarPropostas(propostas);
+      if (avaliacao.issues.length) {
+        avaliacao.issues.forEach((item) => avisosSet.add(item));
+      }
+
+      tentativas.push({
+        tentativa: tentativaNumero,
+        propostas: avaliacao.count,
+        completo: avaliacao.complete,
+        pendencias: avaliacao.issues,
+      });
+
+      if (avaliacao.complete) {
+        break;
+      }
+    }
   } finally {
-    if (validAttachments.length) {
-      const deletions = validAttachments.map((item) =>
+    if (attachments.length) {
+      const deletions = attachments.map((item) =>
         client.files
           .del(item.file_id)
           .catch((err) =>
@@ -138,16 +283,17 @@ export async function extrairCotacoesDeTexto(params) {
     }
   }
 
-  const raw = resp?.output_text || "{}";
-  let json;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    json = { propostas: [], objeto_rascunho: null, avisos: ["JSON inválido"] };
-  }
-  if (!Array.isArray(json.propostas)) json.propostas = [];
-  if (!Array.isArray(json.avisos)) json.avisos = [];
-  return json;
+  const finalAvisos = new Set(Array.isArray(ultimoResultado.avisos) ? ultimoResultado.avisos : []);
+  avisosSet.forEach((item) => finalAvisos.add(item));
+
+  return {
+    propostas: Array.isArray(ultimoResultado.propostas) ? ultimoResultado.propostas : [],
+    objeto_rascunho: ultimoResultado.objeto_rascunho ?? null,
+    avisos: Array.from(finalAvisos).filter(Boolean),
+    tentativas,
+    completo: avaliacao.complete,
+    pendencias: avaliacao.issues,
+  };
 }
 
 /**

@@ -2,7 +2,6 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
-import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
 import dayjs from "dayjs";
 import "dayjs/locale/pt-br.js";
@@ -170,6 +169,70 @@ function normalizeObjetoTexto(value) {
   return text;
 }
 
+function avaliarPreenchimentoPropostas(list = []) {
+  const rows = Array.isArray(list) ? list : [];
+  const relevantes = rows.filter((row) => {
+    if (!row || typeof row !== "object") return false;
+    return (
+      isFilled(row.ofertante) ||
+      isFilled(row.cnpj) ||
+      isFilled(row.cnpj_ofertante) ||
+      isFilled(row.valor) ||
+      Number.isFinite(row.valor_num) ||
+      isFilled(row.data_cotacao) ||
+      isFilled(row.data)
+    );
+  });
+
+  const missing = {
+    ofertante: [],
+    cnpj: [],
+    data: [],
+    valor: [],
+  };
+
+  relevantes.forEach((row, idx) => {
+    const label = `Cotação ${idx + 1}`;
+    if (!isFilled(row.ofertante)) missing.ofertante.push(label);
+    if (!isFilled(row.cnpj) && !isFilled(row.cnpj_ofertante)) missing.cnpj.push(label);
+    const hasData = isFilled(row.data_cotacao) || isFilled(row.data);
+    if (!hasData) missing.data.push(label);
+    const hasValor = isFilled(row.valor) || Number.isFinite(row.valor_num);
+    if (!hasValor) missing.valor.push(label);
+  });
+
+  const pendencias = [];
+  if (!relevantes.length) {
+    pendencias.push("Nenhuma proposta preenchida.");
+  }
+  if (missing.ofertante.length) pendencias.push(`Ofertante ausente em ${missing.ofertante.join(", ")}.`);
+  if (missing.cnpj.length) pendencias.push(`CNPJ/CPF ausente em ${missing.cnpj.join(", ")}.`);
+  if (missing.data.length) pendencias.push(`Data da cotação ausente em ${missing.data.join(", ")}.`);
+  if (missing.valor.length) pendencias.push(`Valor ausente em ${missing.valor.join(", ")}.`);
+
+  const completo = relevantes.length >= 3 && Object.values(missing).every((arr) => arr.length === 0);
+
+  return {
+    completo,
+    pendencias,
+    missing,
+    count: relevantes.length,
+  };
+}
+
+function encodeHeaderPayload(data) {
+  try {
+    const json = JSON.stringify(data);
+    return Buffer.from(json, "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
 function uniqueCaseInsensitive(list = []) {
   const seen = new Set();
   const out = [];
@@ -253,38 +316,115 @@ function sanitizeFilename(name, fallback = "documento") {
     .replace(/_+/g, "_")
     .slice(0, 120);
 }
+function normalizeDocxPlaceholders(xml) {
+  if (!xml || typeof xml !== "string" || !xml.includes("{")) return xml;
+
+  const len = xml.length;
+  let result = "";
+  let i = 0;
+
+  while (i < len) {
+    const ch = xml[i];
+    if (ch === "{") {
+      let raw = "";
+      let openCount = 0;
+      let closeCount = 0;
+      let j = i;
+      let insideTag = false;
+
+      while (j < len) {
+        const current = xml[j];
+        raw += current;
+
+        if (current === "<") insideTag = true;
+        else if (current === ">") insideTag = false;
+        else if (!insideTag) {
+          if (current === "{") openCount += 1;
+          else if (current === "}") closeCount += 1;
+        }
+
+        j += 1;
+        if (openCount >= 2 && closeCount >= 2) break;
+      }
+
+      if (openCount >= 2 && closeCount >= 2) {
+        const plain = raw.replace(/<[^>]+>/g, "");
+        const inner = plain.slice(2, -2).replace(/\s+/g, " ").trim();
+        if (inner) result += `{{${inner}}}`;
+        i = j;
+        continue;
+      }
+    }
+
+    result += ch;
+    i += 1;
+  }
+
+  return result;
+}
+
 function renderDocx(templatePath, dataObj) {
   const buf = fs.readFileSync(templatePath);
   const zip = new PizZip(buf);
 
-  // proteção leve contra espaços quebrando tags
   const docXmlPath = "word/document.xml";
   const f = zip.file(docXmlPath);
   if (f) {
     let xml = f.asText();
     xml = xml
+      .replace(/<w:proofErr[^>]*\/>/g, "")
       .replace(/\{{{+/g, "{{")
       .replace(/}}}+/g, "}}")
       .replace(/\{\{\s+/g, "{{")
       .replace(/\s+\}\}/g, "}}");
+
+    xml = normalizeDocxPlaceholders(xml);
+    xml = applyTemplate(xml, dataObj || {});
     zip.file(docXmlPath, xml);
   }
 
-  try {
-    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-    doc.setData(dataObj);
-    doc.render();
-    return doc.getZip().generate({ type: "nodebuffer" });
-  } catch (e) {
-    const details = (e.properties?.errors || []).map(err => ({
-      id: err.properties?.id,
-      tag: err.properties?.xtag,
-      file: err.properties?.file,
-      context: err.properties?.context,
-    }));
-    console.error({ error: details.length ? details : e });
-    throw e;
+  return zip.generate({ type: "nodebuffer" });
+}
+
+function applyTemplate(xml, context) {
+  let output = xml;
+
+  if (output.includes("{{#propostas}}")) {
+    const propostas = Array.isArray(context.propostas) ? context.propostas : [];
+    output = renderLoop(output, "propostas", propostas, context);
   }
+
+  output = replaceSimpleTokens(output, context);
+  output = output.replace(/{{#[^}]+}}/g, "").replace(/{{\/[a-zA-Z0-9_]+}}/g, "");
+  return output;
+}
+
+function renderLoop(xml, loopName, rows, globalContext = {}) {
+  const startTag = `{{#${loopName}}}`;
+  const endTag = `{{/${loopName}}}`;
+  const startIdx = xml.indexOf(startTag);
+  const endIdx = xml.indexOf(endTag);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return xml;
+
+  const before = xml.slice(0, startIdx);
+  const section = xml.slice(startIdx + startTag.length, endIdx);
+  const after = xml.slice(endIdx + endTag.length);
+
+  const rendered = rows
+    .map((row) => replaceSimpleTokens(section, { ...globalContext, ...row }))
+    .join("");
+
+  return `${before}${rendered}${after}`;
+}
+
+function replaceSimpleTokens(xml, context = {}) {
+  if (!xml.includes("{{")) return xml;
+  return xml.replace(/{{([a-zA-Z0-9_\.]+)}}/g, (match, key) => {
+    if (!Object.prototype.hasOwnProperty.call(context, key)) return "";
+    const value = context[key];
+    if (value === null || value === undefined) return "";
+    return escapeXml(String(value));
+  });
 }
 
 const RUN_PREFIX = '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:color w:val="4472C4" w:themeColor="accent5"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">';
@@ -652,6 +792,7 @@ router.post("/mapa-cotacao", async (req, res) => {
     let propostas = propostasManuais.map((p, idx) => normalizeProposal(p, idx)).filter(hasProposalData);
 
     const avisosCotacao = Array.isArray(body.cotacoesAvisos) ? [...body.cotacoesAvisos] : [];
+    let cotacoesIAStatus = { tentativas: [], completo: false, pendencias: [] };
 
     if (!objetoDesc) {
       objetoDesc = normalizeObjetoTexto(body.objeto || meta.objeto || payload.objeto || "");
@@ -668,9 +809,16 @@ router.post("/mapa-cotacao", async (req, res) => {
           lista_cotacoes_texto: listaCotacoesTexto,
           cotacoes_anexos: cotacoesResumo,
           cotacoes_arquivos: cotacoesArquivos,
-        });
+        }, { maxAttempts: 3 });
 
         if (Array.isArray(analise?.avisos)) avisosCotacao.push(...analise.avisos);
+        if (Array.isArray(analise?.pendencias)) avisosCotacao.push(...analise.pendencias);
+
+        cotacoesIAStatus = {
+          tentativas: Array.isArray(analise?.tentativas) ? analise.tentativas : [],
+          completo: !!analise?.completo,
+          pendencias: Array.isArray(analise?.pendencias) ? analise.pendencias : [],
+        };
 
         if (!objetoDesc && analise?.objeto_rascunho) {
           objetoDesc = normalizeObjetoTexto(analise.objeto_rascunho);
@@ -819,9 +967,27 @@ router.post("/mapa-cotacao", async (req, res) => {
       coordenador_nome: coordenadorNome || "—",
     };
 
+    const preenchimentoFinal = avaliarPreenchimentoPropostas(propostasForTemplate);
+    if (preenchimentoFinal.pendencias.length) {
+      avisosCotacao.push(...preenchimentoFinal.pendencias);
+    }
+    const avisosResumo = Array.from(
+      new Set(avisosCotacao.map((item) => String(item || "").trim()).filter(Boolean))
+    );
+    const headerPayload = {
+      ia: cotacoesIAStatus,
+      final: preenchimentoFinal,
+      avisos: avisosResumo,
+    };
+    const headerValue = encodeHeaderPayload(headerPayload);
+
     const out = renderDocx(templatePath, docData);
     const hint = sanitizeFilename(body.filenameHint || `MapaCotacao_${projetoCodigo}`, "mapa_cotacao");
 
+    res.setHeader("X-Mapa-Status", preenchimentoFinal.completo ? "complete" : "incomplete");
+    if (headerValue) {
+      res.setHeader("X-Mapa-Detalhes", headerValue);
+    }
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     res.setHeader("Content-Disposition", `attachment; filename="${hint}.docx"`);
     return res.send(out);
@@ -920,8 +1086,10 @@ export default router;
 
 /* ==================== (Opcional) registro direto no app ==================== */
 export function registerDocRoutes(app, { /* openai não usado aqui */ TEMPLATE_BASE /* não usado aqui */ } = {}) {
-  // Espelha as mesmas rotas do router sob o prefixo /api/generate
-  app.post("/api/generate/folha-rosto", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/mapa-cotacao", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/justificativa-dispensa", (req, res, next) => router.handle(req, res, next));
+  // Monta o router diretamente sob /api/generate para que as rotas internas
+  // (definidas como "/folha-rosto", "/mapa-cotacao" etc.) sejam resolvidas
+  // corretamente pelo Express. Usar router.handle com o caminho completo
+  // fazia com que o prefixo "/api/generate" continuasse presente em req.url,
+  // resultando em 404.
+  app.use("/api/generate", router);
 }
