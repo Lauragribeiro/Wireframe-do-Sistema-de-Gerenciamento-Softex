@@ -24,14 +24,40 @@
 }
 
 *{ box-sizing:border-box; }
-html, body{ height:100%; }
+html{
+  height: 100%;
+  background-color: var(--bg);
+}
 body{
   margin:0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   color:var(--text);
-  background:
-    radial-gradient(1100px 520px at 70% 90%, rgba(72,99,133,.14) 0%, rgba(169,176,192,.16) 38%, var(--color-background-light) 100%),
-    var(--bg);
+  background-color: var(--bg);
+  min-height: 100%;
+}
+
+.layout-soft-bg{
+  position: relative;
+  min-height: 100vh;
+  background-color: var(--bg);
+}
+
+.layout-soft-bg::after{
+  content: "";
+  position: fixed;
+  inset: auto 0 0 0;
+  height: clamp(220px, 32vh, 420px);
+  background: linear-gradient(180deg, rgba(21, 38, 83, 0) 0%, rgba(72, 99, 133, 0.12) 60%, rgba(169, 176, 192, 0.22) 100%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+body.login{
+  background:#fff;
+}
+
+body.login::after{
+  display: none;
 }
 
 /* Utilities */
@@ -1347,8 +1373,12 @@ body.dashboard-page .header {
 
 .search-field__icon {
   position: absolute;
-  inset: 50% auto auto 16px;
+  top: 50%;
+  left: 16px;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--ink-500);
   font-size: 1rem;
   pointer-events: none;
@@ -1359,7 +1389,7 @@ body.dashboard-page .header {
   border-radius: 14px;
   border: 1px solid rgba(209, 213, 219, .7);
   background: rgba(255, 255, 255, .92);
-  padding: 0.75rem 1rem 0.75rem 42px;
+  padding: 0.75rem 1rem 0.75rem 48px;
   font-size: .95rem;
   transition: border-color .2s ease, box-shadow .2s ease;
 }
