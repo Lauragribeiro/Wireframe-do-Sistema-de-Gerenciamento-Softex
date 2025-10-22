@@ -2,6 +2,13 @@
 
 'use strict';
 
+let lastParsedDocs = (typeof window !== 'undefined' && window.lastParsedDocs)
+  ? window.lastParsedDocs
+  : {};
+if (typeof window !== 'undefined') {
+  window.lastParsedDocs = lastParsedDocs;
+}
+
 document.addEventListener('DOMContentLoaded', function () {
   /* ================== Utils/Helpers ================== */
   var $  = function (s, r) { return (r || document).querySelector(s); };
@@ -338,7 +345,7 @@ $$('[data-pick]').forEach((btn) => {
   let vigenciaFim    = null; // yyyy-mm-dd
 
   // resultados mais recentes por origem
-  let lastParsedDocs = {};   // acumulado do LLM (NF/Ofício/Ordem/Cotações)
+  lastParsedDocs = window.lastParsedDocs || {};   // acumulado do LLM (NF/Ofício/Ordem/Cotações)
   let lastParsedPay  = null; // Comprovante (imagem/OFX)
 
   // arquivos enviados e prontos para irem na linha
@@ -1759,6 +1766,7 @@ form.addEventListener("submit", async (e) => {
       .forEach((sel) => { const el = $(sel); if (el) el.value = ""; });
 
     lastParsedDocs = {};
+    if (typeof window !== "undefined") window.lastParsedDocs = lastParsedDocs;
     lastParsedPay  = null;
     formDocs.nf = formDocs.oficio = formDocs.ordem =
       formDocs.comprovante = formDocs.folhaAssinada = formDocs.decisaoAssinada = null;
