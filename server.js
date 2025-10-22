@@ -10,8 +10,7 @@ import fsp from "node:fs/promises";
 import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import PizZip from "pizzip";
-import Docxtemplater from "docxtemplater";
+import { renderDocxBuffer } from "./src/utils/docxTemplate.js";
 
 import {
   sanitizeDocxXml,
@@ -874,86 +873,16 @@ function readTemplateBuffer(rel) {
 }
 function renderDocxFromTemplate(templateRelPath, data, forceDelims = "auto") {
   const buf = readTemplateBuffer(templateRelPath);
-  const zip = new PizZip(buf);
-  const docXmlPath = "word/document.xml";
-  const f = zip.file(docXmlPath);
-  if (f) {
-    let xml = f.asText();
-    xml = sanitizeDocxXml(xml);
-    xml = normalizeDocxPlaceholders(xml);
-    zip.file(docXmlPath, xml);
-  }
-
-  const doc = new Docxtemplater(zip, {
-    paragraphLoop: true,
-    linebreaks: true,
-    delimiters: { start: "{{", end: "}}" },
-    nullGetter() { return ""; }
-  });
+  const forced = forceDelims === "single" || forceDelims === "double"
+    ? forceDelims
+    : undefined;
 
   try {
-    doc.render(data);
-    return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
+    return renderDocxBuffer(buf, data, { forceDelimiters: forced });
   } catch (err) {
-    try { console.error(JSON.stringify({ error: doc.getFullErrorInfo?.(err) || err }, null, 2)); } catch {}
-    console.warn("[renderDocxFromTemplate] Docxtemplater falhou, aplicando fallback manual:", err?.message || err);
-    const forced = forceDelims === "single" || forceDelims === "double" ? forceDelims : undefined;
-    try {
-      return renderDocxBuffer(buf, data, { forceDelimiters: forced });
-    } catch (fallbackErr) {
-      console.error("[renderDocxFromTemplate] Fallback manual também falhou:", fallbackErr);
-      throw err;
-    }
+    console.error("[renderDocxFromTemplate] erro ao renderizar template", templateRelPath, err);
+    throw err;
   }
-}
-
-function normalizeDocxPlaceholders(xml) {
-  if (!xml || typeof xml !== "string" || !xml.includes("{")) return xml;
-
-  const len = xml.length;
-  let result = "";
-  let i = 0;
-
-  while (i < len) {
-    const ch = xml[i];
-    if (ch === "{") {
-      let raw = "";
-      let openCount = 0;
-      let closeCount = 0;
-      let j = i;
-      let insideTag = false;
-
-      while (j < len) {
-        const current = xml[j];
-        raw += current;
-
-        if (current === "<") insideTag = true;
-        else if (current === ">") insideTag = false;
-        else if (!insideTag) {
-          if (current === "{") openCount += 1;
-          else if (current === "}") closeCount += 1;
-        }
-
-        j += 1;
-        if (openCount >= 2 && closeCount >= 2) break;
-      }
-
-      if (openCount >= 2 && closeCount >= 2) {
-        const plain = raw.replace(/<[^>]+>/g, "");
-        const inner = plain.slice(2, -2).replace(/\s+/g, " ").trim();
-        if (inner) {
-          result += `{{${inner}}}`;
-          i = j;
-          continue;
-        }
-      }
-    }
-
-    result += ch;
-    i += 1;
-  }
-
-  return result;
 }
 
 /* ===================== Helpers (formatação PT-BR) ===================== */
