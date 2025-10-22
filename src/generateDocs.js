@@ -1010,8 +1010,10 @@ export default router;
 
 /* ==================== (Opcional) registro direto no app ==================== */
 export function registerDocRoutes(app, { /* openai não usado aqui */ TEMPLATE_BASE /* não usado aqui */ } = {}) {
-  // Espelha as mesmas rotas do router sob o prefixo /api/generate
-  app.post("/api/generate/folha-rosto", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/mapa-cotacao", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/justificativa-dispensa", (req, res, next) => router.handle(req, res, next));
+  // Monta o router diretamente sob /api/generate para que as rotas internas
+  // (definidas como "/folha-rosto", "/mapa-cotacao" etc.) sejam resolvidas
+  // corretamente pelo Express. Usar router.handle com o caminho completo
+  // fazia com que o prefixo "/api/generate" continuasse presente em req.url,
+  // resultando em 404.
+  app.use("/api/generate", router);
 }
