@@ -1235,6 +1235,8 @@ app.post("/api/generate/mapa-cotacao", async (req, res) => {
 
 /* ===== Páginas ===== */
 app.get("/",              (_req, res) => res.sendFile(PUB("index.html")));
+app.get("/login",         (_req, res) => res.sendFile(PUB("index.html")));
+app.get("/login.html",    (_req, res) => res.sendFile(PUB("index.html")));
 app.get("/dashboard",     (_req, res) => res.sendFile(PUB("dashboard.html")));
 app.get("/prestacao",     (_req, res) => res.sendFile(PUB("prestacao.html")));
 app.get("/docfin",        (_req, res) => res.sendFile(PUB("docfin.html")));
