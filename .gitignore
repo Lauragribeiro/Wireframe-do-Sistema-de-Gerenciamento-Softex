@@ -1,2 +1,10 @@
 # Arquivos de ambiente local (contém variáveis e chaves secretas)
 .env
+
+# Dependências instaladas localmente
+node_modules/
+
+# Saídas temporárias
+*.log
+tmp/
+/data/uploads/tmp/
