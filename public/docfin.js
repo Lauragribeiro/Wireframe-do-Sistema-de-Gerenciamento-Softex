@@ -2057,6 +2057,9 @@ form.addEventListener("submit", async (e) => {
     const yy = d.getFullYear();
     return `${dd}/${mm}/${yy}`;
   }
+  function normalizeObjeto(val){
+    return val == null ? "" : String(val).trim();
+  }
   function toBRL(v){
     if (v == null || v === "") return "";
     if (typeof v === "string" && v.trim().startsWith("R$")) return v;
