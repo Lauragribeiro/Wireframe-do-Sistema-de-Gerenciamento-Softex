@@ -170,6 +170,70 @@ function normalizeObjetoTexto(value) {
   return text;
 }
 
+function avaliarPreenchimentoPropostas(list = []) {
+  const rows = Array.isArray(list) ? list : [];
+  const relevantes = rows.filter((row) => {
+    if (!row || typeof row !== "object") return false;
+    return (
+      isFilled(row.ofertante) ||
+      isFilled(row.cnpj) ||
+      isFilled(row.cnpj_ofertante) ||
+      isFilled(row.valor) ||
+      Number.isFinite(row.valor_num) ||
+      isFilled(row.data_cotacao) ||
+      isFilled(row.data)
+    );
+  });
+
+  const missing = {
+    ofertante: [],
+    cnpj: [],
+    data: [],
+    valor: [],
+  };
+
+  relevantes.forEach((row, idx) => {
+    const label = `Cotação ${idx + 1}`;
+    if (!isFilled(row.ofertante)) missing.ofertante.push(label);
+    if (!isFilled(row.cnpj) && !isFilled(row.cnpj_ofertante)) missing.cnpj.push(label);
+    const hasData = isFilled(row.data_cotacao) || isFilled(row.data);
+    if (!hasData) missing.data.push(label);
+    const hasValor = isFilled(row.valor) || Number.isFinite(row.valor_num);
+    if (!hasValor) missing.valor.push(label);
+  });
+
+  const pendencias = [];
+  if (!relevantes.length) {
+    pendencias.push("Nenhuma proposta preenchida.");
+  }
+  if (missing.ofertante.length) pendencias.push(`Ofertante ausente em ${missing.ofertante.join(", ")}.`);
+  if (missing.cnpj.length) pendencias.push(`CNPJ/CPF ausente em ${missing.cnpj.join(", ")}.`);
+  if (missing.data.length) pendencias.push(`Data da cotação ausente em ${missing.data.join(", ")}.`);
+  if (missing.valor.length) pendencias.push(`Valor ausente em ${missing.valor.join(", ")}.`);
+
+  const completo = relevantes.length >= 3 && Object.values(missing).every((arr) => arr.length === 0);
+
+  return {
+    completo,
+    pendencias,
+    missing,
+    count: relevantes.length,
+  };
+}
+
+function encodeHeaderPayload(data) {
+  try {
+    const json = JSON.stringify(data);
+    return Buffer.from(json, "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
 function uniqueCaseInsensitive(list = []) {
   const seen = new Set();
   const out = [];
@@ -652,6 +716,7 @@ router.post("/mapa-cotacao", async (req, res) => {
     let propostas = propostasManuais.map((p, idx) => normalizeProposal(p, idx)).filter(hasProposalData);
 
     const avisosCotacao = Array.isArray(body.cotacoesAvisos) ? [...body.cotacoesAvisos] : [];
+    let cotacoesIAStatus = { tentativas: [], completo: false, pendencias: [] };
 
     if (!objetoDesc) {
       objetoDesc = normalizeObjetoTexto(body.objeto || meta.objeto || payload.objeto || "");
@@ -668,9 +733,16 @@ router.post("/mapa-cotacao", async (req, res) => {
           lista_cotacoes_texto: listaCotacoesTexto,
           cotacoes_anexos: cotacoesResumo,
           cotacoes_arquivos: cotacoesArquivos,
-        });
+        }, { maxAttempts: 3 });
 
         if (Array.isArray(analise?.avisos)) avisosCotacao.push(...analise.avisos);
+        if (Array.isArray(analise?.pendencias)) avisosCotacao.push(...analise.pendencias);
+
+        cotacoesIAStatus = {
+          tentativas: Array.isArray(analise?.tentativas) ? analise.tentativas : [],
+          completo: !!analise?.completo,
+          pendencias: Array.isArray(analise?.pendencias) ? analise.pendencias : [],
+        };
 
         if (!objetoDesc && analise?.objeto_rascunho) {
           objetoDesc = normalizeObjetoTexto(analise.objeto_rascunho);
@@ -819,9 +891,27 @@ router.post("/mapa-cotacao", async (req, res) => {
       coordenador_nome: coordenadorNome || "—",
     };
 
+    const preenchimentoFinal = avaliarPreenchimentoPropostas(propostasForTemplate);
+    if (preenchimentoFinal.pendencias.length) {
+      avisosCotacao.push(...preenchimentoFinal.pendencias);
+    }
+    const avisosResumo = Array.from(
+      new Set(avisosCotacao.map((item) => String(item || "").trim()).filter(Boolean))
+    );
+    const headerPayload = {
+      ia: cotacoesIAStatus,
+      final: preenchimentoFinal,
+      avisos: avisosResumo,
+    };
+    const headerValue = encodeHeaderPayload(headerPayload);
+
     const out = renderDocx(templatePath, docData);
     const hint = sanitizeFilename(body.filenameHint || `MapaCotacao_${projetoCodigo}`, "mapa_cotacao");
 
+    res.setHeader("X-Mapa-Status", preenchimentoFinal.completo ? "complete" : "incomplete");
+    if (headerValue) {
+      res.setHeader("X-Mapa-Detalhes", headerValue);
+    }
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     res.setHeader("Content-Disposition", `attachment; filename="${hint}.docx"`);
     return res.send(out);
@@ -920,8 +1010,10 @@ export default router;
 
 /* ==================== (Opcional) registro direto no app ==================== */
 export function registerDocRoutes(app, { /* openai não usado aqui */ TEMPLATE_BASE /* não usado aqui */ } = {}) {
-  // Espelha as mesmas rotas do router sob o prefixo /api/generate
-  app.post("/api/generate/folha-rosto", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/mapa-cotacao", (req, res, next) => router.handle(req, res, next));
-  app.post("/api/generate/justificativa-dispensa", (req, res, next) => router.handle(req, res, next));
+  // Monta o router diretamente sob /api/generate para que as rotas internas
+  // (definidas como "/folha-rosto", "/mapa-cotacao" etc.) sejam resolvidas
+  // corretamente pelo Express. Usar router.handle com o caminho completo
+  // fazia com que o prefixo "/api/generate" continuasse presente em req.url,
+  // resultando em 404.
+  app.use("/api/generate", router);
 }
