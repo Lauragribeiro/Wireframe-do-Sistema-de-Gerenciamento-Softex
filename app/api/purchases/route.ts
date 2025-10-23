@@ -16,7 +16,6 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-
     console.log("[v0] Criando nova compra:", body)
 
     let { objeto, justificativa } = body

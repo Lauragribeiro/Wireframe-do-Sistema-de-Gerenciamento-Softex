@@ -47,6 +47,7 @@ export const db = {
       const purchases = await this.getAll()
       const index = purchases.findIndex((p) => p.id === id)
       if (index === -1) return null
+
       purchases[index] = { ...purchases[index], ...data, updatedAt: new Date().toISOString() }
       await writeJSON(PURCHASES_FILE, purchases)
       return purchases[index]
@@ -55,6 +56,7 @@ export const db = {
       const purchases = await this.getAll()
       const filtered = purchases.filter((p) => p.id !== id)
       if (filtered.length === purchases.length) return false
+
       await writeJSON(PURCHASES_FILE, filtered)
       return true
     },

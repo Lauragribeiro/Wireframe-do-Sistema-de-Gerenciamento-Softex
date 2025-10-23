@@ -1,5 +1,4 @@
 // Tipos principais do sistema de gerenciamento Softex
-
 export type Institution = "vertex" | "edge"
 
 export interface Vendor {
