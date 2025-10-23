@@ -10,8 +10,6 @@ import fsp from "node:fs/promises";
 import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { renderDocxBuffer } from "./src/utils/docxTemplate.js";
-
 import {
   sanitizeDocxXml,
   normalizeDocxPlaceholders,
