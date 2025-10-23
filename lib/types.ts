@@ -1,5 +1,5 @@
 // Tipos principais do sistema de gerenciamento Softex
-export type Institution = "vertex" | "edge"
+export type Institution = "SOFTEX" | "OUTRA"
 
 export interface Vendor {
   id: string
@@ -22,7 +22,7 @@ export interface Proposal {
 
 export interface Purchase {
   id: string
-  instituicao: Institution
+  instituicao: string
   cnpj: string
   termoParceria: string
   projeto: string
@@ -43,7 +43,7 @@ export interface Purchase {
 }
 
 export interface ExtractedData {
-  instituicao?: Institution
+  instituicao?: string
   cnpj?: string
   termoParceria?: string
   projeto?: string

@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
     const purchase: Purchase = {
       id: `purchase-${Date.now()}`,
-      instituicao: body.instituicao || "vertex",
+      instituicao: body.instituicao || "SOFTEX",
       cnpj: body.cnpj || "",
       termoParceria: body.termoParceria || "",
       projeto: body.projeto || "",

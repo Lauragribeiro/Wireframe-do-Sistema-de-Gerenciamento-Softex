@@ -3,10 +3,10 @@ import { extractWithGPT } from "./openai-client"
 
 const DOCUMENT_PROMPT = `Analise o documento e extraia as seguintes informações:
 
-- instituicao: "vertex" ou "edge" (identifique pela instituição mencionada)
+- instituicao: nome da instituição (ex: "SOFTEX", "OUTRA")
 - cnpj: CNPJ da instituição (apenas números)
 - termoParceria: número do termo de parceria
-- projeto: nome do projeto
+- projeto: código ou nome do projeto
 - rubrica: código ou nome da rubrica
 - naturezaDispendio: tipo de despesa
 - favorecido: nome do fornecedor/favorecido
@@ -18,6 +18,13 @@ const DOCUMENT_PROMPT = `Analise o documento e extraia as seguintes informaçõe
 - objeto: descrição do objeto da compra
 - justificativa: justificativa da dispensa de licitação
 
+IMPORTANTE: Para NF-e em XML, extraia:
+- numeroNF do campo <nNF>
+- valorNF do campo <vNF>
+- dataEmissaoNF do campo <dhEmi> ou <dEmi>
+- favorecido do campo <xNome> (emitente)
+- cnpjFavorecido do campo <CNPJ> (emitente)
+
 Retorne JSON com os campos encontrados. Se um campo não for encontrado, omita-o.`
 
 export async function extractDocumentData(text: string, imageUrl?: string): Promise<ExtractedData> {
@@ -28,7 +35,7 @@ export async function extractDocumentData(text: string, imageUrl?: string): Prom
     const result = await extractWithGPT(fullPrompt, imageUrl, 2)
 
     const data: ExtractedData = {
-      instituicao: result.instituicao === "edge" ? "edge" : "vertex",
+      instituicao: result.instituicao || "SOFTEX",
       cnpj: result.cnpj ? String(result.cnpj).replace(/\D/g, "") : undefined,
       termoParceria: result.termoParceria,
       projeto: result.projeto,
