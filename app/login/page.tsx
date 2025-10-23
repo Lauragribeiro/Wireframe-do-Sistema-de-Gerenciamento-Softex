@@ -4,17 +4,11 @@ import type React from "react"
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Eye, EyeOff } from "lucide-react"
 
 export default function LoginPage() {
   const router = useRouter()
+  const [activeTab, setActiveTab] = useState<"login" | "signup">("login")
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -48,7 +42,7 @@ export default function LoginPage() {
 
       const session = await response.json()
 
-      // Salvar sessão no localStorage
+      // Salvar sessão
       if (rememberMe) {
         localStorage.setItem("auth_session", JSON.stringify(session))
       } else {
@@ -65,146 +59,418 @@ export default function LoginPage() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError("Cadastro não disponível nesta versão. Use as credenciais de demonstração.")
+    alert("Cadastro não disponível nesta versão. Use as credenciais de demonstração.")
   }
 
   const handleForgotPassword = () => {
-    alert("Funcionalidade de recuperação de senha em desenvolvimento")
+    alert("Recuperação de senha")
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4 dark:from-gray-900 dark:to-gray-800">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">Sistema de automação de PC</CardTitle>
-          <CardDescription>Gerenciamento Softex</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="login" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="login">Log in</TabsTrigger>
-              <TabsTrigger value="signup">Sign up</TabsTrigger>
-            </TabsList>
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        padding: "1rem",
+      }}
+    >
+      <div
+        style={{
+          background: "white",
+          borderRadius: "12px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+          width: "100%",
+          maxWidth: "420px",
+          padding: "2.5rem",
+        }}
+      >
+        {/* Header */}
+        <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+          <h1
+            style={{
+              fontSize: "1.75rem",
+              fontWeight: "700",
+              color: "#1a202c",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Sistema de automação de PC
+          </h1>
+        </div>
 
-            <TabsContent value="login">
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-email">Email</Label>
-                  <Input
-                    id="login-email"
-                    type="email"
-                    placeholder="seu@email.com"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    required
-                  />
-                </div>
+        {/* Tabs */}
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            marginBottom: "2rem",
+            borderBottom: "2px solid #e2e8f0",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setActiveTab("login")}
+            className="auth-tab"
+            data-tab="login"
+            style={{
+              flex: 1,
+              padding: "0.75rem",
+              background: "transparent",
+              border: "none",
+              borderBottom: activeTab === "login" ? "3px solid #667eea" : "3px solid transparent",
+              color: activeTab === "login" ? "#667eea" : "#718096",
+              fontWeight: activeTab === "login" ? "600" : "500",
+              fontSize: "1rem",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              marginBottom: "-2px",
+            }}
+          >
+            Log in
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("signup")}
+            className="auth-tab"
+            data-tab="signup"
+            style={{
+              flex: 1,
+              padding: "0.75rem",
+              background: "transparent",
+              border: "none",
+              borderBottom: activeTab === "signup" ? "3px solid #667eea" : "3px solid transparent",
+              color: activeTab === "signup" ? "#667eea" : "#718096",
+              fontWeight: activeTab === "signup" ? "600" : "500",
+              fontSize: "1rem",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              marginBottom: "-2px",
+            }}
+          >
+            Sign up
+          </button>
+        </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="login-password">Senha</Label>
-                  <div className="relative">
-                    <Input
-                      id="login-password"
-                      type={showPassword ? "text" : "password"}
-                      placeholder="••••••••"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
+        {/* Login Form */}
+        {activeTab === "login" && (
+          <form onSubmit={handleLogin} className="auth-pane" data-pane="login">
+            <div style={{ marginBottom: "1.25rem" }}>
+              <label
+                htmlFor="email"
+                style={{
+                  display: "block",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.875rem",
+                  fontWeight: "500",
+                  color: "#4a5568",
+                }}
+              >
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                placeholder="seu@email.com"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                required
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  border: "1px solid #cbd5e0",
+                  borderRadius: "6px",
+                  fontSize: "1rem",
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#667eea")}
+                onBlur={(e) => (e.target.style.borderColor = "#cbd5e0")}
+              />
+            </div>
 
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="remember"
-                    checked={rememberMe}
-                    onCheckedChange={(checked) => setRememberMe(checked === true)}
-                  />
-                  <Label htmlFor="remember" className="text-sm font-normal">
-                    Remember Me
-                  </Label>
-                </div>
-
-                {error && <p className="text-sm text-red-500">{error}</p>}
-
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "Entrando..." : "Log in"}
-                </Button>
-
+            <div style={{ marginBottom: "1.25rem" }}>
+              <label
+                htmlFor="password"
+                style={{
+                  display: "block",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.875rem",
+                  fontWeight: "500",
+                  color: "#4a5568",
+                }}
+              >
+                Senha
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                  style={{
+                    width: "100%",
+                    padding: "0.75rem",
+                    paddingRight: "3rem",
+                    border: "1px solid #cbd5e0",
+                    borderRadius: "6px",
+                    fontSize: "1rem",
+                    outline: "none",
+                    transition: "border-color 0.2s",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#667eea")}
+                  onBlur={(e) => (e.target.style.borderColor = "#cbd5e0")}
+                />
                 <button
                   type="button"
-                  onClick={handleForgotPassword}
-                  className="w-full text-center text-sm text-muted-foreground hover:text-foreground"
+                  id="togglePwd"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "0.75rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "#718096",
+                    padding: "0.25rem",
+                  }}
                 >
-                  Esqueci minha senha
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
-              </form>
-
-              <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950">
-                <p className="font-semibold">Credenciais de demonstração:</p>
-                <p className="mt-1">Email: admin@softex.com</p>
-                <p>Senha: qualquer senha com 6+ caracteres</p>
               </div>
-            </TabsContent>
+            </div>
 
-            <TabsContent value="signup">
-              <form onSubmit={handleSignup} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input
-                    id="signup-email"
-                    type="email"
-                    placeholder="seu@email.com"
-                    value={signupEmail}
-                    onChange={(e) => setSignupEmail(e.target.value)}
-                    required
-                  />
-                </div>
+            <div style={{ marginBottom: "1.5rem", display: "flex", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                id="remember"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{ marginRight: "0.5rem", cursor: "pointer" }}
+              />
+              <label htmlFor="remember" style={{ fontSize: "0.875rem", color: "#4a5568", cursor: "pointer" }}>
+                Remember Me
+              </label>
+            </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Senha</Label>
-                  <Input
-                    id="signup-password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={signupPassword}
-                    onChange={(e) => setSignupPassword(e.target.value)}
-                    required
-                  />
-                </div>
+            {error && (
+              <div
+                style={{
+                  marginBottom: "1rem",
+                  padding: "0.75rem",
+                  background: "#fed7d7",
+                  color: "#c53030",
+                  borderRadius: "6px",
+                  fontSize: "0.875rem",
+                }}
+              >
+                {error}
+              </div>
+            )}
 
-                <div className="space-y-2">
-                  <Label htmlFor="role">Acesso</Label>
-                  <Select value={signupRole} onValueChange={(value: any) => setSignupRole(value)}>
-                    <SelectTrigger id="role">
-                      <SelectValue placeholder="Selecione..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="administrativo">Administrativo</SelectItem>
-                      <SelectItem value="gerente">Gerente de Projeto</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "0.875rem",
+                background: loading ? "#a0aec0" : "#667eea",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "1rem",
+                fontWeight: "600",
+                cursor: loading ? "not-allowed" : "pointer",
+                transition: "background 0.2s",
+                marginBottom: "1rem",
+              }}
+              onMouseEnter={(e) => !loading && (e.currentTarget.style.background = "#5a67d8")}
+              onMouseLeave={(e) => !loading && (e.currentTarget.style.background = "#667eea")}
+            >
+              {loading ? "Entrando..." : "Log in"}
+            </button>
 
-                <Button type="submit" className="w-full">
-                  Criar conta
-                </Button>
+            <button
+              type="button"
+              id="forgotBtn"
+              onClick={handleForgotPassword}
+              style={{
+                width: "100%",
+                background: "transparent",
+                border: "none",
+                color: "#667eea",
+                fontSize: "0.875rem",
+                cursor: "pointer",
+                textAlign: "center",
+                padding: "0.5rem",
+              }}
+            >
+              Esqueci minha senha
+            </button>
 
-                <p className="text-center text-xs text-muted-foreground">
-                  Ao continuar, você concorda com os termos de uso.
-                </p>
-              </form>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+            <div
+              style={{
+                marginTop: "1.5rem",
+                padding: "1rem",
+                background: "#ebf4ff",
+                borderRadius: "6px",
+                fontSize: "0.875rem",
+              }}
+            >
+              <p style={{ fontWeight: "600", marginBottom: "0.5rem", color: "#2c5282" }}>
+                Credenciais de demonstração:
+              </p>
+              <p style={{ color: "#2d3748" }}>Email: admin@softex.com</p>
+              <p style={{ color: "#2d3748" }}>Senha: qualquer senha com 6+ caracteres</p>
+            </div>
+          </form>
+        )}
+
+        {/* Signup Form */}
+        {activeTab === "signup" && (
+          <form onSubmit={handleSignup} className="auth-pane" data-pane="signup">
+            <div style={{ marginBottom: "1.25rem" }}>
+              <label
+                htmlFor="signup-email"
+                style={{
+                  display: "block",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.875rem",
+                  fontWeight: "500",
+                  color: "#4a5568",
+                }}
+              >
+                Email
+              </label>
+              <input
+                id="signup-email"
+                type="email"
+                placeholder="seu@email.com"
+                value={signupEmail}
+                onChange={(e) => setSignupEmail(e.target.value)}
+                required
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  border: "1px solid #cbd5e0",
+                  borderRadius: "6px",
+                  fontSize: "1rem",
+                  outline: "none",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#667eea")}
+                onBlur={(e) => (e.target.style.borderColor = "#cbd5e0")}
+              />
+            </div>
+
+            <div style={{ marginBottom: "1.25rem" }}>
+              <label
+                htmlFor="signup-password"
+                style={{
+                  display: "block",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.875rem",
+                  fontWeight: "500",
+                  color: "#4a5568",
+                }}
+              >
+                Senha
+              </label>
+              <input
+                id="signup-password"
+                type="password"
+                placeholder="••••••••"
+                value={signupPassword}
+                onChange={(e) => setSignupPassword(e.target.value)}
+                required
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  border: "1px solid #cbd5e0",
+                  borderRadius: "6px",
+                  fontSize: "1rem",
+                  outline: "none",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#667eea")}
+                onBlur={(e) => (e.target.style.borderColor = "#cbd5e0")}
+              />
+            </div>
+
+            <div style={{ marginBottom: "1.5rem" }}>
+              <label
+                htmlFor="role"
+                style={{
+                  display: "block",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.875rem",
+                  fontWeight: "500",
+                  color: "#4a5568",
+                }}
+              >
+                Acesso
+              </label>
+              <select
+                id="role"
+                value={signupRole}
+                onChange={(e) => setSignupRole(e.target.value as any)}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  border: "1px solid #cbd5e0",
+                  borderRadius: "6px",
+                  fontSize: "1rem",
+                  outline: "none",
+                  cursor: "pointer",
+                  background: "white",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#667eea")}
+                onBlur={(e) => (e.target.style.borderColor = "#cbd5e0")}
+              >
+                <option value="">Selecione…</option>
+                <option value="administrativo">Administrativo</option>
+                <option value="gerente">Gerente de Projeto</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                width: "100%",
+                padding: "0.875rem",
+                background: "#667eea",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "1rem",
+                fontWeight: "600",
+                cursor: "pointer",
+                transition: "background 0.2s",
+                marginBottom: "1rem",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#5a67d8")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#667eea")}
+            >
+              Criar conta
+            </button>
+
+            <p
+              style={{
+                textAlign: "center",
+                fontSize: "0.75rem",
+                color: "#718096",
+                marginTop: "1rem",
+              }}
+            >
+              Ao continuar, você concorda com os termos de uso.
+            </p>
+          </form>
+        )}
+      </div>
     </div>
   )
 }
